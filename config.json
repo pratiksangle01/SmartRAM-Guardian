@@ -1,0 +1,52 @@
+﻿{
+    "Mode":  "observe",
+    "SampleIntervalSeconds":  30,
+    "AdaptiveSampling":  true,
+    "BusyIntervalSeconds":  15,
+    "WarnAvailableMiB":  1536,
+    "CriticalAvailableMiB":  819,
+    "WarnCommitPercent":  80,
+    "CriticalCommitPercent":  92,
+    "PagingWarnPagesInputPerSec":  500,
+    "HysteresisMiB":  256,
+    "HysteresisCommitPercent":  5,
+    "CooldownSeconds":  300,
+    "LogDirectory":  "logs",
+    "LogMaxBytes":  1048576,
+    "LogMaxFiles":  5,
+    "LowDiskFreeMiB":  500,
+    "StateFile":  "state.json",
+    "PidFile":  "guardian.pid",
+    "PauseFile":  "guardian.pause",
+    "TopProcessCount":  10,
+    "IncludeCommandLine":  true,
+    "IncludeIoCounters":  true,
+    "EnableAggressiveTrim":  false,
+    "EnableEcoQoS":  false,
+    "GracefulCloseTimeoutSeconds":  15,
+    "AllowlistClose":  [
+
+                       ],
+    "SuggestionOnlyProcesses":  [
+                                    "OneDrive",
+                                    "SearchIndexer",
+                                    "Widgets",
+                                    "WidgetService",
+                                    "PhoneExperienceHost",
+                                    "YourPhone",
+                                    "Teams",
+                                    "SkypeApp"
+                                ],
+    "ExtraProtectedProcesses":  [
+
+                                ],
+    "Profiles":  {
+                     "Active":  "default",
+                     "Available":  [
+                                       "default",
+                                       "dev",
+                                       "gaming",
+                                       "installation"
+                                   ]
+                 }
+}

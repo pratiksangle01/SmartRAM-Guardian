@@ -1,0 +1,23 @@
+# Runtime artifacts - never commit these.
+logs/
+state.json
+guardian.pid
+guardian.pause
+guardian.stop
+
+# Pester / PSScriptAnalyzer output
+test-results.xml
+coverage.xml
+*.TestResults.xml
+pester-results.json
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+Desktop.ini
+
+# PowerShell artifacts
+*.ps1xml.tmp
+__pycache__/
