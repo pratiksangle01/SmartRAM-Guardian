@@ -90,6 +90,17 @@ smartram uninstall
 Open a new terminal after installing and the `smartram` command is there.
 With a Git install, use `python -m smartram <command>`.
 
+## Source setup and tests
+
+For a fresh checkout, Python prerequisites, an isolated virtual environment,
+headless/observe-mode verification, and troubleshooting, follow
+[Setup](docs/SETUP.md). There is no PowerShell/Pester development workflow in
+the current Python app: install the package and run `python -m pytest -q` as documented.
+The installers above enable login startup and start the guardian immediately;
+use the source guide for a test-only path without those changes.
+
+See the [setup audit](docs/SETUP-AUDIT.md) for findings and verification limits.
+
 ## How it decides
 
 An app is closed only when **all** of these are true:
