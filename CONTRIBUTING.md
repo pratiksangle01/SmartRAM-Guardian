@@ -19,8 +19,12 @@ Useful while working:
 python -m smartram scan      # what the guardian sees; closes nothing
 python -m smartram doctor    # what works on this machine
 python -m smartram run       # run in this terminal, Ctrl+C to stop
+python tools/e2e_close.py    # a private guardian closes a real throwaway process (80 s)
 python tools/footprint.py    # CPU and memory the guardian itself uses
+python tools/snap_pet.py out # screenshots of the pet on this machine (needs Pillow)
 ```
+
+Every pull request runs all of this on Windows, macOS and Linux and attaches the screenshots.
 
 ## Where things are
 
@@ -30,6 +34,7 @@ python tools/footprint.py    # CPU and memory the guardian itself uses
 | `smartram/engine.py` | sampling, the decision to close, pacing |
 | `smartram/foreground.py` | finding the app in use on each system |
 | `smartram/widget.py` | the dolphin and its panel |
+| `smartram/pathlink.py` | putting the `smartram` command on PATH, and taking it off |
 | `smartram/__main__.py` | the `smartram` commands |
 | `tools/draw_pet.py` | redraws the dolphin artwork |
 | `tools/make_demo.py` | regenerates the README pictures |

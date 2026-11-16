@@ -30,21 +30,29 @@ def check(ok, text):
 
 
 def start_victims(work):
-    """One process that sleeps and one that burns CPU, under unique names."""
+    """One process that waits and one that burns CPU, under unique names.
+
+    They are copies of a shell: unlike `sleep` or `yes`, which on some systems are
+    one program that looks at its own name, a shell runs under any name.
+    """
     if WINDOWS:
-        cmd = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "cmd.exe")
-        idle_exe = shutil.copy(cmd, os.path.join(work, IDLE + ".exe"))
-        busy_exe = shutil.copy(cmd, os.path.join(work, BUSY + ".exe"))
-        hidden = dict(creationflags=0x08000000, stdout=subprocess.DEVNULL,
-                      stderr=subprocess.DEVNULL)
-        idle = subprocess.Popen([idle_exe, "/k"], stdin=subprocess.PIPE, **hidden)
-        busy = subprocess.Popen([busy_exe, "/c", "for /l %i in (1,0,2) do @rem"],
-                                stdin=subprocess.DEVNULL, **hidden)
-        return idle, busy
-    idle_exe = shutil.copy(shutil.which("sleep"), os.path.join(work, IDLE))
-    busy_exe = shutil.copy(shutil.which("yes"), os.path.join(work, BUSY))
-    idle = subprocess.Popen([idle_exe, "600"])
-    busy = subprocess.Popen([busy_exe], stdout=subprocess.DEVNULL)
+        shell = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "cmd.exe")
+        wait, spin, suffix = ["/k"], ["/c", "for /l %i in (1,0,2) do @rem"], ".exe"
+        hidden = dict(creationflags=0x08000000)
+    else:
+        shell = shutil.which("dash") or shutil.which("bash") or "/bin/sh"
+        wait, spin, suffix, hidden = ["-c", "read line"], ["-c", "while :; do :; done"], "", {}
+    idle_exe = shutil.copy(shell, os.path.join(work, IDLE + suffix))
+    busy_exe = shutil.copy(shell, os.path.join(work, BUSY + suffix))
+    quiet = dict(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **hidden)
+    idle = subprocess.Popen([idle_exe] + wait, stdin=subprocess.PIPE, **quiet)
+    busy = subprocess.Popen([busy_exe] + spin, stdin=subprocess.DEVNULL, **quiet)
+    time.sleep(2)
+    if idle.poll() is not None or busy.poll() is not None:
+        for proc in (idle, busy):
+            if proc.poll() is None:
+                proc.kill()
+        raise SystemExit("could not start the throwaway processes (copies of %s)" % shell)
     return idle, busy
 
 

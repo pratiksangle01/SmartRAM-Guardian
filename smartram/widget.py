@@ -82,7 +82,7 @@ def mood(snap, threshold):
 
 
 class Widget:
-    def __init__(self, engine, stop_event, selftest=0):
+    def __init__(self, engine, stop_event, selftest=0, transparent=True):
         import tkinter as tk
         import tkinter.font as tkfont
         self.tk, self.engine, self.stop = tk, engine, stop_event
@@ -100,28 +100,37 @@ class Widget:
                 root.attributes(attr, value)
             except tk.TclError:
                 pass
+        # Where the system allows it, only the dolphin shows, not a box around it.
         self._clear = DARK
         try:
-            if sys.platform == "win32":
+            if transparent and sys.platform == "win32":
                 root.attributes("-transparentcolor", KEY)
                 self._clear = KEY
-            elif sys.platform == "darwin":
+            elif transparent and sys.platform == "darwin":
                 root.attributes("-transparent", True)
                 self._clear = "systemTransparent"
         except tk.TclError:
             self._clear = DARK
 
-        self.art = {name: tk.PhotoImage(master=root, data=getattr(pet_art, name))
+        # A colour key cannot blend soft edges, so Windows gets the hard-edged drawings.
+        prefix = "CRISP_" if self._clear == KEY else ""
+        self.art = {name: tk.PhotoImage(master=root, data=getattr(pet_art, prefix + name))
                     for name in ("OPEN", "BLINK", "PAUSED")}
         mono = self.mono = tkfont.nametofont("TkFixedFont").copy()
         mono.configure(size=9)
         bold = tkfont.nametofont("TkDefaultFont").copy()
         bold.configure(size=10, weight="bold")
 
-        self.pet = tk.Canvas(root, width=SIZE, height=SIZE, highlightthickness=0, bd=0)
-        self._img = self.pet.create_image(SIZE // 2, SIZE // 2, image=self.art["OPEN"])
+        # The picture is a label, not a canvas item: macOS does not paint canvas
+        # images on a see-through window.
+        self.pet = tk.Frame(root, width=SIZE, height=SIZE, bd=0, highlightthickness=0)
+        self.pet_img = tk.Label(self.pet, image=self.art["OPEN"], bd=0, highlightthickness=0)
+        self.pet_img.place(x=0, y=0)
         # Status dot: green fine, yellow busy, red high, grey paused.
-        self._dot = self.pet.create_oval(4, SIZE - 15, 15, SIZE - 4, outline="#0b0d12", width=2)
+        self.dot = tk.Canvas(self.pet, width=13, height=13, bd=0, highlightthickness=0)
+        self._dot = self.dot.create_oval(1, 1, 12, 12, outline="#0b0d12", width=2)
+        self.dot.place(x=3, y=SIZE - 16)
+        self._pet_parts = (self.pet, self.pet_img, self.dot)
         self.head = tk.Frame(root, bg=DARK)
         tk.Label(self.head, text="SmartRAM Guardian", font=bold, bg=DARK, fg=TEXT,
                  anchor="w").pack(fill="x", padx=8)
@@ -157,9 +166,10 @@ class Widget:
         self.clean_btn.pack(side="left", padx=6)
         self._button(buttons, "Quit", self._quit).pack(side="right")
 
-        self.pet.bind("<ButtonPress-1>", self._press)
-        self.pet.bind("<B1-Motion>", self._motion)
-        self.pet.bind("<ButtonRelease-1>", self._release)
+        for part in self._pet_parts:
+            part.bind("<ButtonPress-1>", self._press)
+            part.bind("<B1-Motion>", self._motion)
+            part.bind("<ButtonRelease-1>", self._release)
 
         # Pet's screen position; the panel grows away from the nearest screen edges.
         self.px = root.winfo_screenwidth() - SIZE - 24
@@ -195,14 +205,16 @@ class Widget:
         if not self.expanded:
             self.head.grid_forget()
             self.panel.grid_forget()
-            self.pet.configure(bg=self._clear)
+            for part in self._pet_parts:
+                part.configure(bg=self._clear)
             root.configure(bg=self._clear)
             self.pet.grid(row=0, column=0)
             self._size = (SIZE, SIZE)
             root.geometry("%dx%d+%d+%d" % (SIZE, SIZE, self.px, self.py))
             return
         right, bottom = self.px + SIZE / 2 > sw / 2, self.py + SIZE / 2 > sh / 2
-        self.pet.configure(bg=DARK)
+        for part in self._pet_parts:
+            part.configure(bg=DARK)
         root.configure(bg=DARK)
         row = 2 if bottom else 0
         self.pet.grid(row=row, column=1 if right else 0)
@@ -311,9 +323,9 @@ class Widget:
         state = (art, dy, color)
         if state != self._pet_state:
             self._pet_state = state
-            self.pet.itemconfigure(self._img, image=self.art[art])
-            self.pet.coords(self._img, SIZE // 2, SIZE // 2 + dy)
-            self.pet.itemconfigure(self._dot, fill=color)
+            self.pet_img.configure(image=self.art[art])
+            self.pet_img.place(x=0, y=dy)
+            self.dot.itemconfigure(self._dot, fill=color)
 
     def _fill_tips(self, snap):
         """One row per idle app, each with a button that lets the guardian close it."""

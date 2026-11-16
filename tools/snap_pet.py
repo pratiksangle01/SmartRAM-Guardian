@@ -18,9 +18,9 @@ from make_demo import sample_engine  # also puts the repository on sys.path
 from smartram import widget
 
 
-def main(out):
-    os.makedirs(out, exist_ok=True)
-    w = widget.Widget(sample_engine(tempfile.mkdtemp()), threading.Event())
+def capture(out, prefix="", transparent=True):
+    w = widget.Widget(sample_engine(tempfile.mkdtemp()), threading.Event(),
+                      transparent=transparent)
     root = w.root
     screen_w, screen_h = root.winfo_screenwidth(), root.winfo_screenheight()
 
@@ -38,8 +38,9 @@ def main(out):
         part = shot.crop([int(v * scale) for v in box])
         if zoom > 1:
             part = part.resize((part.width * zoom, part.height * zoom))
-        part.save(os.path.join(out, name))
-        print("saved %s %s (screen %dx%d, scale %.1f)" % (name, part.size, screen_w, screen_h, scale))
+        part.save(os.path.join(out, prefix + name))
+        print("saved %s%s %s (screen %dx%d, scale %.1f)"
+              % (prefix, name, part.size, screen_w, screen_h, scale))
 
     grab("pet-on-desktop.png", 50, zoom=3)
     sheet = w.tk.Toplevel(root)
@@ -54,6 +55,14 @@ def main(out):
     w._ask("Spotify")
     grab("panel-asking.png", 24)
     w._quit()
+
+
+def main(out):
+    os.makedirs(out, exist_ok=True)
+    capture(out)
+    if sys.platform == "darwin":
+        # For comparison: the pet without a see-through window.
+        capture(out, "boxed-", transparent=False)
 
 
 if __name__ == "__main__":

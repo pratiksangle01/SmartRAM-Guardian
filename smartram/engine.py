@@ -25,6 +25,7 @@ HISTORY = 30
 SUGGEST_MIN_BYTES = 200 * 2**20
 SUGGEST_IDLE_SECONDS = 15 * 60
 MAX_SLOWDOWN = 8
+RECOVER_SCANS = 5  # light scans in a row before the guardian speeds up again
 HIGH_PERCENT = 90  # RAM this full is watched at the fast interval
 RAM_FINE = "RAM is fine"
 
@@ -57,6 +58,10 @@ def on_battery():
 class Sampler:
     """Reads memory and the process table through psutil."""
 
+    ATTRS = ["pid", "ppid", "name", "memory_info", "cpu_times", "create_time"]
+    if sys.platform != "win32":
+        ATTRS.append("status")  # to skip zombies; Windows has none and the lookup is slow there
+
     def __init__(self):
         self._prev = {}
         self._t = None
@@ -66,8 +71,7 @@ class Sampler:
         dt = (now - self._t) if self._t else None
         self._t = now
         procs, seen = [], {}
-        attrs = ["pid", "ppid", "name", "memory_info", "cpu_times", "create_time", "status"]
-        for p in psutil.process_iter(attrs):
+        for p in psutil.process_iter(self.ATTRS):
             i = p.info
             if i.get("status") == psutil.STATUS_ZOMBIE or not i.get("name"):
                 continue
@@ -291,6 +295,7 @@ class Engine:
         self._wake = threading.Event()
         self.watching = False  # the panel is open: keep its details fresh
         self.slowdown = 1      # raised when the guardian itself uses too much CPU
+        self._light_scans = 0
         self.saved_session = 0
         self.saved_total = 0
         self.closed_total = 0
@@ -425,11 +430,16 @@ class Engine:
             return
         before = self.slowdown
         if cpu > limit:
-            self.slowdown = min(MAX_SLOWDOWN, self.slowdown * 2)
-        elif cpu < limit / 2.0:
-            self.slowdown = max(1, self.slowdown // 2)
+            self.slowdown, self._light_scans = min(MAX_SLOWDOWN, self.slowdown * 2), 0
+        elif cpu < limit / 2.0 and self.slowdown > 1:
+            # Speed up again only after a run of light scans, or it would flip back and forth.
+            self._light_scans += 1
+            if self._light_scans >= RECOVER_SCANS:
+                self.slowdown, self._light_scans = self.slowdown // 2, 0
+        else:
+            self._light_scans = 0
         if self.slowdown != before:
-            log.info("own CPU use %.1f%% (limit %.1f%%): checking %dx less often",
+            log.info("own CPU use %.1f%% (limit %.1f%%): scan interval x%d",
                      cpu, limit, self.slowdown)
 
     def tick(self):

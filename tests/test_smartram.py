@@ -362,9 +362,11 @@ def test_backs_off_when_the_guardian_itself_is_heavy(world):
     assert world.tick()["self"]["slowdown"] == 2
     assert world.tick(5)["self"]["slowdown"] == 8              # capped
     world.own_cpu = 1.5                                        # under the limit: hold
-    assert world.tick()["self"]["slowdown"] == 8
-    world.own_cpu = 0.2
-    assert world.tick(3)["self"]["slowdown"] == 1
+    assert world.tick(8)["self"]["slowdown"] == 8
+    world.own_cpu = 0.2                                        # light for a while: recover
+    assert world.tick(4)["self"]["slowdown"] == 8              # ...but not at once
+    assert world.tick()["self"]["slowdown"] == 4
+    assert world.tick(10)["self"]["slowdown"] == 1
 
 
 def test_clean_now_ignores_the_ram_threshold(world):
@@ -467,7 +469,7 @@ def test_panel_text_and_mood(world):
 def test_pet_art_is_png():
     import base64
     from smartram import pet_art
-    for name in ("OPEN", "BLINK", "PAUSED"):
+    for name in ("OPEN", "BLINK", "PAUSED", "CRISP_OPEN", "CRISP_BLINK", "CRISP_PAUSED"):
         assert base64.b64decode(getattr(pet_art, name)).startswith(b"\x89PNG")
 
 

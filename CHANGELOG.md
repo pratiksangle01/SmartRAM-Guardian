@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.0
+
+- Fixed: on Ubuntu nothing was ever closed, because a service that is always running there counted as an installer in progress. The same happened on Windows while Windows servicing was active.
+- Fixed: an allowed app with several processes could have its idle helpers closed while the app itself was busy. An app is now judged as a whole and closed through its main process; the memory of its helpers is counted too.
+- Fixed: the `smartram` command now works in a new terminal after installing on Windows and macOS. Uninstall undoes this.
+- Suggestions have an **Allow** button with a confirmation, list only whole apps (never system components or another app's helpers), and show the app's full size.
+- The panel shows one row per app instead of one per process.
+- Safer focus detection: Store apps on Windows are recognised as the app in use, and a window that belongs to another account no longer counts.
+- Uninstall deletes only the guardian's own files, and finishes by itself on Windows.
+- Update notifiers and the backup scheduler are no longer treated as junk on Linux.
+- New setting `close_builtin_junk`.
+
 ## 1.1.0
 
 - The guardian is lighter on the machine: it scans every process only every 30 seconds and reads just the memory figure in between, scans closely only when RAM is nearly full, something is closing or the panel is open, halves its activity on battery, lowers its own priority, and slows down by itself if it goes over its CPU budget.
