@@ -7,7 +7,7 @@ Describe 'Pressure assessment' {
     Context 'False low-memory trigger (cache only)' {
         It 'does not act when available is low but commit and paging are calm' {
             $cfg = Get-TestConfig
-            $sample = New-FakeSample -AvailableMiB 400 -CommitPercent 45 -PagesInputPerSec 10
+            $sample = Get-FakeSample -AvailableMiB 400 -CommitPercent 45 -PagesInputPerSec 10
             $a = Get-PressureAssessment -Sample $sample -Config $cfg
             $a.Level | Should Be 'Critical'
             $a.Signals | Should Be 'AvailableCritical'
@@ -18,7 +18,7 @@ Describe 'Pressure assessment' {
 
         It 'does not act when commit is merely elevated without memory pressure' {
             $cfg = Get-TestConfig
-            $sample = New-FakeSample -AvailableMiB 3000 -CommitPercent 85 -PagesInputPerSec 0
+            $sample = Get-FakeSample -AvailableMiB 3000 -CommitPercent 85 -PagesInputPerSec 0
             $a = Get-PressureAssessment -Sample $sample -Config $cfg
             # CommitHigh is a warning but not corroborated by memory or paging.
             $a.Signals | Should Be 'CommitHigh'
@@ -27,7 +27,7 @@ Describe 'Pressure assessment' {
 
         It 'reports no signals and no action on a healthy machine' {
             $cfg = Get-TestConfig
-            $sample = New-FakeSample -AvailableMiB 4000 -CommitPercent 40 -PagesInputPerSec 0
+            $sample = Get-FakeSample -AvailableMiB 4000 -CommitPercent 40 -PagesInputPerSec 0
             $a = Get-PressureAssessment -Sample $sample -Config $cfg
             $a.Level | Should Be 'Normal'
             $a.Signals.Count | Should Be 0
@@ -38,7 +38,7 @@ Describe 'Pressure assessment' {
     Context 'Genuine pressure' {
         It 'acts when low memory is corroborated by hard paging' {
             $cfg = Get-TestConfig
-            $sample = New-FakeSample -AvailableMiB 500 -CommitPercent 70 -PagesInputPerSec 3000
+            $sample = Get-FakeSample -AvailableMiB 500 -CommitPercent 70 -PagesInputPerSec 3000
             $a = Get-PressureAssessment -Sample $sample -Config $cfg
             $a.Signals -contains 'AvailableCritical' | Should Be $true
             $a.Signals -contains 'HardPaging' | Should Be $true
@@ -47,7 +47,7 @@ Describe 'Pressure assessment' {
 
         It 'treats a critical commit charge as actionable on its own' {
             $cfg = Get-TestConfig
-            $sample = New-FakeSample -AvailableMiB 2500 -CommitPercent 95 -PagesInputPerSec 0
+            $sample = Get-FakeSample -AvailableMiB 2500 -CommitPercent 95 -PagesInputPerSec 0
             $a = Get-PressureAssessment -Sample $sample -Config $cfg
             $a.Signals | Should Be 'CommitCritical'
             $a.Corroborated | Should Be $true
@@ -58,7 +58,7 @@ Describe 'Pressure assessment' {
     Context 'Hysteresis' {
         It 'does not let healthy available memory bypass critical commit hysteresis' {
             $cfg = Get-TestConfig
-            $sample = New-FakeSample -AvailableMiB 3000 -CommitPercent ($cfg.CriticalCommitPercent - 1)
+            $sample = Get-FakeSample -AvailableMiB 3000 -CommitPercent ($cfg.CriticalCommitPercent - 1)
             $a = Get-PressureAssessment -Sample $sample -Config $cfg -PreviousLevel 'Critical'
             $a.RawLevel | Should Be 'Warn'
             $a.Level | Should Be 'Critical'
@@ -66,7 +66,7 @@ Describe 'Pressure assessment' {
 
         It 'does not let healthy commit bypass critical available-memory hysteresis' {
             $cfg = Get-TestConfig
-            $sample = New-FakeSample -AvailableMiB ($cfg.CriticalAvailableMiB + 1) -CommitPercent 40
+            $sample = Get-FakeSample -AvailableMiB ($cfg.CriticalAvailableMiB + 1) -CommitPercent 40
             $a = Get-PressureAssessment -Sample $sample -Config $cfg -PreviousLevel 'Critical'
             $a.RawLevel | Should Be 'Warn'
             $a.Level | Should Be 'Critical'
@@ -74,7 +74,7 @@ Describe 'Pressure assessment' {
 
         It 'drops to Warn when both critical hysteresis margins are met' {
             $cfg = Get-TestConfig
-            $sample = New-FakeSample `
+            $sample = Get-FakeSample `
                 -AvailableMiB ($cfg.CriticalAvailableMiB + $cfg.HysteresisMiB) `
                 -CommitPercent ($cfg.CriticalCommitPercent - $cfg.HysteresisCommitPercent)
             $a = Get-PressureAssessment -Sample $sample -Config $cfg -PreviousLevel 'Critical'
@@ -83,14 +83,14 @@ Describe 'Pressure assessment' {
 
         It 'returns to Normal when clearly above the hysteresis band' {
             $cfg = Get-TestConfig
-            $sample = New-FakeSample -AvailableMiB 3000 -CommitPercent 40 -PagesInputPerSec 0
+            $sample = Get-FakeSample -AvailableMiB 3000 -CommitPercent 40 -PagesInputPerSec 0
             $a = Get-PressureAssessment -Sample $sample -Config $cfg -PreviousLevel 'Critical'
             $a.Level | Should Be 'Normal'
         }
 
         It 'does not flap from Warn to Normal on a borderline reading' {
             $cfg = Get-TestConfig
-            $sample = New-FakeSample -AvailableMiB 1600 -CommitPercent 40 -PagesInputPerSec 0
+            $sample = Get-FakeSample -AvailableMiB 1600 -CommitPercent 40 -PagesInputPerSec 0
             $a = Get-PressureAssessment -Sample $sample -Config $cfg -PreviousLevel 'Warn'
             $a.Level | Should Be 'Warn'
         }
@@ -99,7 +99,7 @@ Describe 'Pressure assessment' {
     Context 'Cooldown' {
         It 'suppresses action while inside the cooldown window' {
             $cfg = Get-TestConfig
-            $sample = New-FakeSample -AvailableMiB 400 -CommitPercent 95 -PagesInputPerSec 3000
+            $sample = Get-FakeSample -AvailableMiB 400 -CommitPercent 95 -PagesInputPerSec 3000
             $a = Get-PressureAssessment -Sample $sample -Config $cfg -LastActionTime (Get-Date).AddSeconds(-30)
             $a.InCooldown | Should Be $true
             $a.Actionable | Should Be $false
@@ -108,7 +108,7 @@ Describe 'Pressure assessment' {
 
         It 'allows action again once the cooldown has elapsed' {
             $cfg = Get-TestConfig
-            $sample = New-FakeSample -AvailableMiB 400 -CommitPercent 95 -PagesInputPerSec 3000
+            $sample = Get-FakeSample -AvailableMiB 400 -CommitPercent 95 -PagesInputPerSec 3000
             $a = Get-PressureAssessment -Sample $sample -Config $cfg -LastActionTime (Get-Date).AddSeconds(-($cfg.CooldownSeconds + 5))
             $a.InCooldown | Should Be $false
             $a.Actionable | Should Be $true

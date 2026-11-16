@@ -90,7 +90,7 @@ function Write-SRGLog {
         [System.IO.File]::AppendAllText($script:LogPath, $line + [Environment]::NewLine)
     }
     catch {
-        # Never let logging crash the guardian loop.
+        Write-Verbose "Unable to append to the log: $_"
     }
 }
 

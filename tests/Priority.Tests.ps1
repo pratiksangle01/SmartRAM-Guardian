@@ -4,17 +4,27 @@ Import-Module (Join-Path $script:RepoRoot 'src\SRG.Priority.psm1') -Force -Disab
 
 Describe 'Memory-priority lever' {
 
+    Context 'WhatIf safety' {
+        It 'does not change memory priority in WhatIf mode' {
+            Set-SRGProcessMemoryPriority -ProcessId $PID -WhatIf | Should BeNullOrEmpty
+        }
+
+        It 'does not change EcoQoS in WhatIf mode' {
+            Set-SRGProcessEcoQoSMode -ProcessId $PID -WhatIf | Should BeNullOrEmpty
+        }
+    }
+
     Context 'Target selection (pure)' {
         It 'selects only idle, windowless, unknown background processes' {
             $cfg = Get-TestConfig
             $procs = @(
-                (New-FakeProcess -ProcessId 1 -Name 'backgroundsvc' -WorkingSetMiB 300 -HasMainWindow $false -CpuPercentSinceLast 0.1),
-                (New-FakeProcess -ProcessId 2 -Name 'MsMpEng' -WorkingSetMiB 500 -HasMainWindow $false),
-                (New-FakeProcess -ProcessId 3 -Name 'withwindow' -WorkingSetMiB 500 -HasMainWindow $true),
-                (New-FakeProcess -ProcessId 4 -Name 'busybg' -WorkingSetMiB 500 -HasMainWindow $false -CpuPercentSinceLast 40)
+                (Get-FakeProcess -ProcessId 1 -Name 'backgroundsvc' -WorkingSetMiB 300 -HasMainWindow $false -CpuPercentSinceLast 0.1),
+                (Get-FakeProcess -ProcessId 2 -Name 'MsMpEng' -WorkingSetMiB 500 -HasMainWindow $false),
+                (Get-FakeProcess -ProcessId 3 -Name 'withwindow' -WorkingSetMiB 500 -HasMainWindow $true),
+                (Get-FakeProcess -ProcessId 4 -Name 'busybg' -WorkingSetMiB 500 -HasMainWindow $false -CpuPercentSinceLast 40)
             )
             $classified = Get-ProcessClassification -Processes $procs -Config $cfg -ForegroundPid 0
-            $targets = Get-PriorityLoweringTargets -ClassifiedProcesses $classified
+            $targets = Get-PriorityLoweringTarget -ClassifiedProcesses $classified
             $targets.Count | Should Be 1
             $targets[0].Pid | Should Be 1
         }
@@ -22,40 +32,40 @@ Describe 'Memory-priority lever' {
         It 'never selects a protected or foreground process' {
             $cfg = Get-TestConfig
             $procs = @(
-                (New-FakeProcess -ProcessId 10 -Name 'MsMpEng' -WorkingSetMiB 400 -HasMainWindow $false),
-                (New-FakeProcess -ProcessId 11 -Name 'myapp' -WorkingSetMiB 400 -HasMainWindow $false)
+                (Get-FakeProcess -ProcessId 10 -Name 'MsMpEng' -WorkingSetMiB 400 -HasMainWindow $false),
+                (Get-FakeProcess -ProcessId 11 -Name 'myapp' -WorkingSetMiB 400 -HasMainWindow $false)
             )
             $classified = Get-ProcessClassification -Processes $procs -Config $cfg -ForegroundPid 11
-            $targets = Get-PriorityLoweringTargets -ClassifiedProcesses $classified
+            $targets = Get-PriorityLoweringTarget -ClassifiedProcesses $classified
             $targets.Count | Should Be 0
         }
 
         It 'ignores processes smaller than the minimum working set' {
             $cfg = Get-TestConfig
-            $procs = @((New-FakeProcess -ProcessId 20 -Name 'tiny' -WorkingSetMiB 5 -HasMainWindow $false))
+            $procs = @((Get-FakeProcess -ProcessId 20 -Name 'tiny' -WorkingSetMiB 5 -HasMainWindow $false))
             $classified = Get-ProcessClassification -Processes $procs -Config $cfg -ForegroundPid 0
-            (Get-PriorityLoweringTargets -ClassifiedProcesses $classified).Count | Should Be 0
+            (Get-PriorityLoweringTarget -ClassifiedProcesses $classified).Count | Should Be 0
         }
 
         It 'ignores a windowless child of a windowed app (general IDE protection)' {
             $cfg = Get-TestConfig
             $procs = @(
-                (New-FakeProcess -ProcessId 50 -Name 'SomeNewIde' -WorkingSetMiB 500 -HasMainWindow $true),
-                (New-FakeProcess -ProcessId 51 -Name 'SomeNewIdeHelper' -ParentPid 50 -WorkingSetMiB 400 -HasMainWindow $false)
+                (Get-FakeProcess -ProcessId 50 -Name 'SomeNewIde' -WorkingSetMiB 500 -HasMainWindow $true),
+                (Get-FakeProcess -ProcessId 51 -Name 'SomeNewIdeHelper' -ParentPid 50 -WorkingSetMiB 400 -HasMainWindow $false)
             )
             $classified = Get-ProcessClassification -Processes $procs -Config $cfg -ForegroundPid 0
-            $targets = Get-PriorityLoweringTargets -ClassifiedProcesses $classified -Processes $procs
+            $targets = Get-PriorityLoweringTarget -ClassifiedProcesses $classified -Processes $procs
             $targets.Count | Should Be 0
         }
 
         It 'still selects a genuinely windowless background process' {
             $cfg = Get-TestConfig
             $procs = @(
-                (New-FakeProcess -ProcessId 60 -Name 'SomeNewIde' -WorkingSetMiB 500 -HasMainWindow $true),
-                (New-FakeProcess -ProcessId 61 -Name 'daemon' -ParentPid 1 -WorkingSetMiB 200 -HasMainWindow $false)
+                (Get-FakeProcess -ProcessId 60 -Name 'SomeNewIde' -WorkingSetMiB 500 -HasMainWindow $true),
+                (Get-FakeProcess -ProcessId 61 -Name 'daemon' -ParentPid 1 -WorkingSetMiB 200 -HasMainWindow $false)
             )
             $classified = Get-ProcessClassification -Processes $procs -Config $cfg -ForegroundPid 0
-            $targets = Get-PriorityLoweringTargets -ClassifiedProcesses $classified -Processes $procs
+            $targets = Get-PriorityLoweringTarget -ClassifiedProcesses $classified -Processes $procs
             $targets.Count | Should Be 1
             $targets[0].Pid | Should Be 61
         }

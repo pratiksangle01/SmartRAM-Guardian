@@ -132,7 +132,7 @@ is running.
 
 ### Installer / build / copy detection
 
-`Get-ActiveSensitiveOperations` scans names and command lines for installer
+`Get-ActiveSensitiveOperation` scans names and command lines for installer
 patterns (`msiexec`, `setup.exe`, `unins*.exe`, `TiWorker`,
 `TrustedInstaller`, `winget`, `choco`, `scoop`), build patterns (`msbuild`,
 `dotnet build|publish|test|pack`, `cmake --build`, `ninja`, `cargo build|test`,

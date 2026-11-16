@@ -35,7 +35,7 @@ $stopPath = Join-Path $root 'guardian.stop'
 
 function Test-StopRequested { Test-Path -LiteralPath $stopPath }
 
-function Wait-IntervalSeconds {
+function Wait-IntervalSecond {
     param([int]$Seconds)
     for ($i = 0; $i -lt $Seconds; $i++) {
         if (Test-StopRequested) { return }
@@ -91,7 +91,7 @@ if (-not $Once) {
 
 Write-SRGLog -Level INFO -Category 'lifecycle' -Message "guardian starting (pid $PID, mode=$($config.Mode), interval=$($config.SampleIntervalSeconds)s)"
 
-$pressureState = New-PressureState
+$pressureState = Get-InitialPressureState
 $prevSample = $null
 $prevCpuMap = $null
 # PIDs we already lowered priority on, so we never re-issue the same call every
@@ -112,7 +112,7 @@ try {
         $pressureState.Level = $assessment.Level
         $pressureState.Samples++
 
-        $context = Get-WorkContext -Processes $sample.Processes -Config $config -ForegroundPid $sample.ForegroundPid
+        $context = Get-WorkContext -Processes $sample.Processes -ForegroundPid $sample.ForegroundPid
         $classified = Get-ProcessClassification -Processes $sample.Processes -Config $config -ForegroundPid $sample.ForegroundPid
         $gate = Test-SafetyGate -Config $config -Processes $sample.Processes -Assessment $assessment -RootPath $root
 
@@ -124,7 +124,7 @@ try {
         if ($assessment.Actionable -and -not $paused) {
             if ($config.Mode -eq 'observe') {
                 Write-SRGLog -Level INFO -Category 'suggest' -Message "corroborated pressure but mode=observe; no action. $($assessment.Reason)"
-                $wouldLower = Get-PriorityLoweringTargets -ClassifiedProcesses $classified -Processes $sample.Processes
+                $wouldLower = Get-PriorityLoweringTarget -ClassifiedProcesses $classified -Processes $sample.Processes
                 if ($wouldLower.Count -gt 0) {
                     Write-SRGLog -Level INFO -Category 'suggest' -Message ("would lower memory priority on: " +
                         (($wouldLower | ForEach-Object { "$($_.Name)(pid $($_.Pid), $($_.WorkingSetMiB)MiB)" }) -join ', '))
@@ -142,7 +142,7 @@ try {
                     foreach ($k in @($loweredPids.Keys)) {
                         if (-not (Get-Process -Id $k -ErrorAction SilentlyContinue)) { $loweredPids.Remove($k) }
                     }
-                    $targets = Get-PriorityLoweringTargets -ClassifiedProcesses $classified -Processes $sample.Processes
+                    $targets = Get-PriorityLoweringTarget -ClassifiedProcesses $classified -Processes $sample.Processes
                     if ($targets.Count -gt 0) {
                         $applied = Invoke-PriorityLowering -Targets $targets -SeenPids $loweredPids -ApplyEcoQoS
                         foreach ($x in $applied) {
@@ -158,7 +158,7 @@ try {
                             Add-Member -InputObject $t -NotePropertyName MainWindowTitle `
                                 -NotePropertyValue (Get-ProcessWindowTitle -ProcessId $t.Pid) -Force
                         }
-                        $elig = Test-CloseEligibility -Process $t -Config $config -Class $t.Class
+                        $elig = Test-CloseEligibility -Process $t -Class $t.Class
                         if (-not $elig.Eligible) {
                             Write-SRGLog -Level INFO -Category 'action' -Message "skip $($t.Name) (pid $($t.Pid)): $($elig.Reason)"
                             continue
@@ -201,7 +201,7 @@ try {
             if ($config.AdaptiveSampling -and $assessment.Actionable) {
                 $interval = $config.BusyIntervalSeconds
             }
-            Wait-IntervalSeconds -Seconds $interval
+            Wait-IntervalSecond -Seconds $interval
         }
     } while (-not $Once)
 }

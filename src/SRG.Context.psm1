@@ -11,7 +11,6 @@ function Get-WorkContext {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]$Processes,
-        [Parameter(Mandatory = $true)]$Config,
         [int]$ForegroundPid = 0
     )
     $byPid = @{}

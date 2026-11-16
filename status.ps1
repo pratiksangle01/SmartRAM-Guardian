@@ -30,7 +30,7 @@ if (Test-Path -LiteralPath $cfgPath) {
         $cfg = Get-Content -LiteralPath $cfgPath -Raw | ConvertFrom-Json
         if ($cfg.SampleIntervalSeconds -ge 10) { $freshWindowSeconds = [int]$cfg.SampleIntervalSeconds * 3 }
     }
-    catch { }
+    catch { Write-Verbose "Unable to read sampling interval: $_" }
 }
 
 $stateAgeSeconds = $null
