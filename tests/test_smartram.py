@@ -262,6 +262,29 @@ def test_reused_parent_pid_is_not_a_parent():
     assert active_tree(by_pid, 10) == {10}
 
 
+def test_desktop_in_front_does_not_put_every_app_in_use(world):
+    config.save(world.paths.config, dict(config.DEFAULTS, close_list=["spotify"]))
+    world.procs = [make_proc(10, "explorer.exe", 80 * MB, ppid=0),
+                   make_proc(11, "chrome.exe", 500 * MB, ppid=10),
+                   make_proc(12, "chrome.exe", 300 * MB, ppid=11),
+                   make_proc(13, "spotify", 400 * MB, ppid=10)]
+    by_pid = {p.pid: p for p in world.procs}
+    assert active_tree(by_pid, 10) == {10}                      # a click on the taskbar
+    assert active_tree(by_pid, 11) == {10, 11, 12}              # working in the browser
+    world.fg = 10
+    world.tick(4)
+    assert world.closer.asked == ["spotify"]                    # still counted as idle
+
+
+def test_no_suggestions_while_the_app_in_front_is_unknown(world):
+    world.fg = None
+    world.tick()
+    world.now += 16 * 60
+    assert world.tick()["suggest"] == []
+    config.save(world.paths.config, dict(config.DEFAULTS, allow_without_focus=True))
+    assert [s["name"] for s in world.tick()["suggest"]] == ["spotify"]
+
+
 def test_window_of_another_account_does_not_count_as_focus(world):
     config.save(world.paths.config, dict(config.DEFAULTS, close_list=["spotify"]))
     world.engine.owned = lambda proc: proc.pid != 100           # firefox is someone else's

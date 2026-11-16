@@ -77,6 +77,17 @@ PROTECTED = frozenset(normalize(n) for n in (
     "smartram", "SmartRAM-Guardian",
 ))
 
+# The desktop itself. It starts every app, so having it in front (a click on the
+# taskbar or the desktop) must not make all of those apps count as "in use".
+SESSION_SHELLS = frozenset(normalize(n) for n in (
+    "explorer", "sihost", "StartMenuExperienceHost", "ShellExperienceHost", "SearchHost",
+    "Finder", "Dock", "launchd", "loginwindow",
+    "systemd", "init", "gnome-shell", "gnome-session-binary", "plasmashell", "kdeinit5",
+    "ksmserver", "kwin_x11", "kwin_wayland", "cinnamon", "xfce4-session", "xfce4-panel",
+    "xfdesktop", "mate-session", "mate-panel", "caja", "nemo-desktop", "lxqt-panel",
+    "budgie-panel", "sway", "Hyprland", "i3", "openbox",
+))
+
 # Known background helpers that hold RAM without doing user-visible work.
 JUNK = frozenset(normalize(n) for n in (
     # Windows

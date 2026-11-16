@@ -82,7 +82,7 @@ def mood(snap, threshold):
 
 
 class Widget:
-    def __init__(self, engine, stop_event, selftest=0, transparent=True):
+    def __init__(self, engine, stop_event, selftest=0):
         import tkinter as tk
         import tkinter.font as tkfont
         self.tk, self.engine, self.stop = tk, engine, stop_event
@@ -100,17 +100,16 @@ class Widget:
                 root.attributes(attr, value)
             except tk.TclError:
                 pass
-        # Where the system allows it, only the dolphin shows, not a box around it.
+        # On Windows only the dolphin shows, with no box around it. macOS does not paint
+        # pictures on a see-through window (checked on a real machine), so there and
+        # on Linux the pet sits on a small dark tile.
         self._clear = DARK
-        try:
-            if transparent and sys.platform == "win32":
+        if sys.platform == "win32":
+            try:
                 root.attributes("-transparentcolor", KEY)
                 self._clear = KEY
-            elif transparent and sys.platform == "darwin":
-                root.attributes("-transparent", True)
-                self._clear = "systemTransparent"
-        except tk.TclError:
-            self._clear = DARK
+            except tk.TclError:
+                pass
 
         # A colour key cannot blend soft edges, so Windows gets the hard-edged drawings.
         prefix = "CRISP_" if self._clear == KEY else ""
@@ -121,8 +120,6 @@ class Widget:
         bold = tkfont.nametofont("TkDefaultFont").copy()
         bold.configure(size=10, weight="bold")
 
-        # The picture is a label, not a canvas item: macOS does not paint canvas
-        # images on a see-through window.
         self.pet = tk.Frame(root, width=SIZE, height=SIZE, bd=0, highlightthickness=0)
         self.pet_img = tk.Label(self.pet, image=self.art["OPEN"], bd=0, highlightthickness=0)
         self.pet_img.place(x=0, y=0)

@@ -247,7 +247,7 @@ def main_process(by_pid, proc):
 
 
 def active_tree(by_pid, root, children=None):
-    """PIDs of root, its ancestors and its descendants."""
+    """PIDs in use because of root: itself, its ancestors and what it started."""
     if root not in by_pid:
         return set()
     out, proc = {root}, by_pid[root]
@@ -256,9 +256,11 @@ def active_tree(by_pid, root, children=None):
         if proc is None or proc.pid in out:
             break
         out.add(proc.pid)
-    if children is None:
-        children = children_map(by_pid)
-    out.update(p.pid for p in descendants(children, root))
+    # The desktop starts every app; a click on it does not put them all in use.
+    if by_pid[root].norm not in rules.SESSION_SHELLS:
+        if children is None:
+            children = children_map(by_pid)
+        out.update(p.pid for p in descendants(children, root))
     return out
 
 
@@ -386,6 +388,9 @@ class Engine:
 
     def _suggestions(self, procs, by_pid, children, now, protect, targets):
         """Big apps that have sat idle in the background for a long time."""
+        # "In the background" cannot be judged without knowing which app is in front.
+        if not self._focus_known and not self.cfg["allow_without_focus"]:
+            return []
         groups = {}
         for p in procs:
             if p.pid in self._self or p.norm in targets:

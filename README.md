@@ -58,7 +58,7 @@ Update an installer install by running the install command again.
 
 ## What it does
 
-- **Always on, always visible.** A small dolphin stays in the corner of your screen and swims gently, so you know the guardian is alive. Drag it anywhere.
+- **Always on, always visible.** A small dolphin stays in the corner of your screen and swims gently, so you know the guardian is alive. Drag it anywhere. On Windows it floats freely; on macOS and Linux it sits on a small dark tile.
 - **One click shows everything.** RAM in use, RAM saved, what was closed, what was kept and why.
 - **Knows what you are working in.** The app in front of you and everything it started are never touched.
 - **Closes background junk on its own.** Idle updaters, crash handlers and similar helpers are closed when memory gets tight.
@@ -125,12 +125,12 @@ A memory tool should not be the thing using your memory.
 
 | System | CPU (of one core) | Memory |
 | --- | --- | --- |
-| Windows | 0.35% | 34 MB |
-| macOS | 0.58% | 93 MB |
-| Linux | 0.13% | 31 MB |
+| Windows | 0.28% | 34 MB |
+| macOS | 0.62% | 95 MB |
+| Linux | 0.22% | 32 MB |
 
-Measured at v1.1.0 with the dolphin on screen, on GitHub's hosted test machines
-(140 to 535 running processes). Every change is measured again, and the build
+Measured at v1.2.0 with the dolphin on screen, on GitHub's hosted test machines
+(135 to 516 running processes). Every change is measured again, and the build
 fails above 5% of a core or 250 MB. Measure your own machine with `python tools/footprint.py`.
 
 ## Settings
