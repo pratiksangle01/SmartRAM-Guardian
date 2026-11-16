@@ -81,6 +81,21 @@ def mood(snap, threshold):
     return "busy" if pct >= threshold else "ok"
 
 
+def new_root(tk, tries=3, wait=time.sleep):
+    """A Tk root window.
+
+    On Windows Tk now and then cannot read its own startup file and works again a
+    moment later. Anything else, such as a missing display, is reported at once.
+    """
+    for left in range(tries - 1, -1, -1):
+        try:
+            return tk.Tk()
+        except tk.TclError as e:
+            if not left or "init.tcl" not in str(e):
+                raise
+            wait(1)
+
+
 class Widget:
     def __init__(self, engine, stop_event, selftest=0):
         import tkinter as tk
@@ -91,7 +106,7 @@ class Widget:
         self._tips_shown = self._asking = None
         self._allowed = set()  # suggestions just accepted, hidden until the engine catches up
 
-        root = self.root = tk.Tk()
+        root = self.root = new_root(tk)
         root.title("SmartRAM Guardian")
         root.overrideredirect(True)
         root.configure(bg=DARK)

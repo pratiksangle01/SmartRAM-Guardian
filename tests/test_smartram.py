@@ -12,7 +12,7 @@ from smartram import autostart, config, engine, foreground, pathlink, rules
 from smartram.__main__ import main
 from smartram.engine import (OTHER_OPEN, Engine, active_tree, children_map, main_process,
                              make_proc, own_pids, parent_of)
-from smartram.widget import SIZE, Widget, fmt_bytes, mood, panel_text
+from smartram.widget import SIZE, Widget, fmt_bytes, mood, new_root, panel_text
 
 MB = 2**20
 
@@ -719,6 +719,32 @@ def pet(world):
         widget.root.destroy()
     except Exception:
         pass
+
+
+def test_pet_gets_past_a_passing_tk_start_failure_but_reports_a_lasting_one():
+    class FlakyTk:
+        class TclError(Exception):
+            pass
+
+        def __init__(self, *errors):
+            self.errors, self.waits = list(errors), []
+
+        def Tk(self):
+            if self.errors:
+                raise self.TclError(self.errors.pop(0))
+            return "root"
+
+    lost = "Can't find a usable init.tcl in the following directories"
+    tk = FlakyTk(lost, lost)
+    assert new_root(tk, wait=tk.waits.append) == "root" and tk.waits == [1, 1]
+    tk = FlakyTk(lost, lost, lost, lost)
+    with pytest.raises(tk.TclError):
+        new_root(tk, wait=tk.waits.append)
+    assert len(tk.errors) == 1 and tk.waits == [1, 1]          # three tries, then it says so
+    tk = FlakyTk("no display name and no $DISPLAY environment variable", "x")
+    with pytest.raises(tk.TclError):
+        new_root(tk, wait=tk.waits.append)
+    assert tk.errors == ["x"] and tk.waits == []               # not something that passes
 
 
 def test_pet_opens_closes_and_can_be_dragged(pet, world):
