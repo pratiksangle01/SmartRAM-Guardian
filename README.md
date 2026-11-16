@@ -1,4 +1,4 @@
-# SmartRAM Guardian
+# 🐬 SmartRAM Guardian
 
 ## Linux
 
