@@ -6,11 +6,13 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Path = (Join-Path $PSScriptRoot '.'),
+    [string]$Path = $PSScriptRoot,
     [switch]$NoAnalyzer
 )
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
+$repoRoot = Split-Path -Parent $PSCommandPath
+$repoRoot = Split-Path -Parent $repoRoot
 
 $pester = Get-Module -ListAvailable Pester |
     Where-Object { $_.Version -ge [version]'3.4.0' -and $_.Version.Major -lt 5 } |
@@ -39,7 +41,7 @@ if (-not $NoAnalyzer) {
         Import-Module $analyzer.Path -Force
         Write-Host ''
         Write-Host 'PSScriptAnalyzer:'
-        $issues = @(Invoke-ScriptAnalyzer -Path (Join-Path (Split-Path -Parent $PSScriptRoot) '.') -Recurse `
+        $issues = @(Invoke-ScriptAnalyzer -Path $repoRoot -Recurse `
             -Severity Error, Warning -ExcludeRule PSAvoidUsingWriteHost, PSAvoidUsingPositionalParameters)
         if ($issues.Count -eq 0) { Write-Host '  no issues' }
         else { $issues | Format-Table RuleName, Severity, ScriptName, Line, Message -AutoSize | Out-String -Width 200 | Write-Host }

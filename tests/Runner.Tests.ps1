@@ -3,6 +3,8 @@ Describe 'Test runner' {
     $runner = Join-Path (Split-Path -Parent $PSScriptRoot) 'tests\Invoke-Tests.ps1'
     $shell = (Get-Process -Id $PID).Path
     $modules = Join-Path $TestDrive 'Modules'
+    $childOutput = Join-Path $TestDrive 'runner-output.txt'
+    $childError = Join-Path $TestDrive 'runner-error.txt'
     $pesterDir = Join-Path $modules 'Pester'
     $analyzerDir = Join-Path $modules 'PSScriptAnalyzer'
     New-Item -ItemType Directory -Path $pesterDir, $analyzerDir -Force | Out-Null
@@ -49,28 +51,29 @@ Export-ModuleMember Invoke-ScriptAnalyzer
     }
 
     It 'succeeds with passing tests and zero analyzer findings' {
-        $output = & $shell -NoProfile -File $runner 2>&1
-        if ($LASTEXITCODE -ne 0) { Write-Host ($output | Out-String) }
-        $LASTEXITCODE | Should Be 0
+        $child = Start-Process -FilePath $shell -ArgumentList '-NoProfile', '-File', "`"$runner`"" -Wait -PassThru -RedirectStandardOutput $childOutput -RedirectStandardError $childError
+        if ($child.ExitCode -ne 0) { Get-Content $childOutput, $childError | Write-Host }
+        $child.ExitCode | Should Be 0
     }
     It 'fails with exactly one analyzer finding' {
         $env:SRG_TEST_ISSUES = '1'
-        & $shell -NoProfile -File $runner 2>&1 | Out-Null
-        $LASTEXITCODE | Should Be 1
+        $child = Start-Process -FilePath $shell -ArgumentList '-NoProfile', '-File', "`"$runner`"" -Wait -PassThru -RedirectStandardOutput $childOutput -RedirectStandardError $childError
+        $child.ExitCode | Should Be 1
     }
     It 'fails when tests fail' {
         $env:SRG_TEST_FAILED = '1'
-        & $shell -NoProfile -File $runner -NoAnalyzer 2>&1 | Out-Null
-        $LASTEXITCODE | Should Be 1
+        $child = Start-Process -FilePath $shell -ArgumentList '-NoProfile', '-File', "`"$runner`"", '-NoAnalyzer' -Wait -PassThru -RedirectStandardOutput $childOutput -RedirectStandardError $childError
+        $child.ExitCode | Should Be 1
     }
     It 'fails rather than succeeding when no tests are discovered' {
         $env:SRG_TEST_TOTAL = '0'
-        & $shell -NoProfile -File $runner -NoAnalyzer 2>&1 | Out-Null
-        $LASTEXITCODE | Should Not Be 0
+        $child = Start-Process -FilePath $shell -ArgumentList '-NoProfile', '-File', "`"$runner`"", '-NoAnalyzer' -Wait -PassThru -RedirectStandardOutput $childOutput -RedirectStandardError $childError
+        $child.ExitCode | Should Not Be 0
     }
     It 'can explicitly skip analyzer findings for a tests-only run' {
         $env:SRG_TEST_ISSUES = '1'
-        & $shell -NoProfile -File $runner -NoAnalyzer 2>&1 | Out-Null
-        $LASTEXITCODE | Should Be 0
+        $child = Start-Process -FilePath $shell -ArgumentList '-NoProfile', '-File', "`"$runner`"", '-NoAnalyzer' -Wait -PassThru -RedirectStandardOutput $childOutput -RedirectStandardError $childError
+        if ($child.ExitCode -ne 0) { Get-Content $childOutput, $childError | Write-Host }
+        $child.ExitCode | Should Be 0
     }
 }

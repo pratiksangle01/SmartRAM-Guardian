@@ -20,6 +20,19 @@ clean Windows installation.
 | Inspect analyzer result | Source inspection found scalar/null `.Count` use under strict mode and no failing exit code for analyzer findings; an empty test path could also appear successful. | Collect analyzer output as an array, propagate findings to exit code 1, reject zero tests, add runner regression tests. |
 | Existing Windows CI | Run `42656865967` failed with `PSScriptAnalyzer reported 21 issue(s).` Its Pester step was skipped. | Fixed actual unused variables and empty catches, and documented narrow false-positive/API-compatibility suppressions rather than disabling analyzer rules globally. CI now uses the documented runner. |
 
+## Follow-up Windows CI findings
+
+The first updated Windows run (`43805159701`) reached all 75 tests and reported
+69 passes, 6 failures, and no analyzer findings. The live priority test assumed
+every child starts at memory priority 5; this runner's child started at 2. The
+test now reads the initial priority, lowers relative to it, and verifies restoring
+that exact value (also restoring in cleanup). This preserves the native round-trip
+assertions instead of assuming a particular host's inherited process priority.
+The five new child-runner regression tests failed while Windows PowerShell 5.1
+converted child stderr to terminating test errors; they now capture output through
+`Start-Process` and assert its exit code. Runner paths are captured before loading
+test modules rather than recomputed from automatic variables afterward.
+
 ## Verification boundaries
 
 A temporary PowerShell 7 installation on Linux was used only for syntax/static

@@ -65,15 +65,22 @@ Describe 'Memory-priority lever' {
         It 'reads, lowers and restores memory priority on our own child process' {
             $child = Start-Process -FilePath $env:ComSpec `
                 -ArgumentList '/c', 'ping -n 10 127.0.0.1 >nul' -PassThru -WindowStyle Hidden
+            $initial = $null
             try {
                 Start-Sleep -Milliseconds 400
-                (Get-SRGProcessMemoryPriority -ProcessId $child.Id).Priority | Should Be 5
-                (Set-SRGProcessMemoryPriority -ProcessId $child.Id -Priority 2).Success | Should Be $true
-                (Get-SRGProcessMemoryPriority -ProcessId $child.Id).Priority | Should Be 2
-                (Set-SRGProcessMemoryPriority -ProcessId $child.Id -Priority 5).Success | Should Be $true
-                (Get-SRGProcessMemoryPriority -ProcessId $child.Id).Priority | Should Be 5
+                $initial = Get-SRGProcessMemoryPriority -ProcessId $child.Id
+                $initial.Error | Should BeNullOrEmpty
+                ($initial.Priority -ge 1 -and $initial.Priority -le 5) | Should Be $true
+                $lower = [Math]::Max(1, $initial.Priority - 1)
+                (Set-SRGProcessMemoryPriority -ProcessId $child.Id -Priority $lower).Success | Should Be $true
+                (Get-SRGProcessMemoryPriority -ProcessId $child.Id).Priority | Should Be $lower
+                (Set-SRGProcessMemoryPriority -ProcessId $child.Id -Priority $initial.Priority).Success | Should Be $true
+                (Get-SRGProcessMemoryPriority -ProcessId $child.Id).Priority | Should Be $initial.Priority
             }
             finally {
+                if ($initial -and $initial.Priority -ge 1 -and $initial.Priority -le 5) {
+                    Set-SRGProcessMemoryPriority -ProcessId $child.Id -Priority $initial.Priority | Out-Null
+                }
                 Wait-Process -Id $child.Id -Timeout 15 -ErrorAction SilentlyContinue
             }
         }
