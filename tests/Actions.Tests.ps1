@@ -77,14 +77,14 @@ Describe 'Graceful close eligibility' {
         It 'is eligible when it is allowlisted, has a window and no unsaved marker' {
             $cfg = Get-TestConfig -Mode 'allowlisted-close' -AllowlistClose @('Spotify')
             $p = New-FakeProcess -Name 'Spotify' -HasMainWindow $true -MainWindowTitle 'Spotify Premium'
-            $e = Test-CloseEligibility -Process $p -Config $cfg -Class 'Disposable'
+            $e = Test-CloseEligibility -Process $p -Class 'Disposable'
             $e.Eligible | Should Be $true
         }
 
         It 'is skipped when the window title suggests unsaved work' {
             $cfg = Get-TestConfig -Mode 'allowlisted-close' -AllowlistClose @('Editor')
             $p = New-FakeProcess -Name 'Editor' -HasMainWindow $true -MainWindowTitle '*untitled-1 - Editor'
-            $e = Test-CloseEligibility -Process $p -Config $cfg -Class 'Disposable'
+            $e = Test-CloseEligibility -Process $p -Class 'Disposable'
             $e.Eligible | Should Be $false
             $e.Reason | Should Match 'unsaved'
         }
@@ -92,7 +92,7 @@ Describe 'Graceful close eligibility' {
         It 'is skipped when the process has no main window' {
             $cfg = Get-TestConfig -Mode 'allowlisted-close' -AllowlistClose @('Spotify')
             $p = New-FakeProcess -Name 'Spotify' -HasMainWindow $false -MainWindowTitle ''
-            $e = Test-CloseEligibility -Process $p -Config $cfg -Class 'Disposable'
+            $e = Test-CloseEligibility -Process $p -Class 'Disposable'
             $e.Eligible | Should Be $false
             $e.Reason | Should Match 'no main window'
         }
@@ -103,7 +103,7 @@ Describe 'Graceful close eligibility' {
             $cfg = Get-TestConfig -Mode 'allowlisted-close'
             $p = New-FakeProcess -Name 'Anything' -HasMainWindow $true
             foreach ($cls in 'Protected', 'ActiveWork', 'SuggestionOnly', 'Unknown') {
-                $e = Test-CloseEligibility -Process $p -Config $cfg -Class $cls
+                $e = Test-CloseEligibility -Process $p -Class $cls
                 $e.Eligible | Should Be $false
             }
         }

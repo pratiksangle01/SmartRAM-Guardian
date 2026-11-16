@@ -36,7 +36,7 @@ function Test-SafetyGate {
         $pauseFile = Join-Path $RootPath $Config.PauseFile
         if (Test-Path -LiteralPath $pauseFile) { $blocked.Add('guardian is paused (pause file present)') }
     }
-    $sensitive = Get-ActiveSensitiveOperations -Processes $Processes
+    $sensitive = Get-ActiveSensitiveOperation -Processes $Processes
     foreach ($s in $sensitive) { $blocked.Add($s) }
 
     return [pscustomobject]@{
@@ -53,7 +53,6 @@ function Test-CloseEligibility {
     #>
     param(
         [Parameter(Mandatory = $true)]$Process,
-        [Parameter(Mandatory = $true)]$Config,
         [Parameter(Mandatory = $true)][string]$Class
     )
     if ($Class -ne 'Disposable') {
@@ -106,7 +105,7 @@ function Invoke-GracefulClose {
     return [pscustomobject]@{ Outcome = $outcome; ProcessId = $ProcessId; WaitedMs = [int]$sw.ElapsedMilliseconds }
 }
 
-function Get-DisposableCandidates {
+function Get-DisposableCandidate {
     <#
     .SYNOPSIS
         Learning loop, stage 1: propose candidates with evidence. Nothing is
@@ -124,7 +123,7 @@ function Get-DisposableCandidates {
     $candidates = foreach ($p in $ClassifiedProcesses) {
         if ($p.Class -eq 'Unknown' -and $p.HasMainWindow -and
             $p.WorkingSetMiB -ge $MinWorkingSetMiB -and
-            ($p.PSObject.Properties['CpuPercentSinceLast'] -eq $null -or $p.CpuPercentSinceLast -le $MaxCpuPercent)) {
+            ($null -eq $p.PSObject.Properties['CpuPercentSinceLast'] -or $p.CpuPercentSinceLast -le $MaxCpuPercent)) {
             $io = 'n/a'
             if ($p.PSObject.Properties['IoMiBPerSecSinceLast']) { $io = "$($p.IoMiBPerSecSinceLast) MiB/s IO" }
             [pscustomobject]@{
@@ -138,7 +137,7 @@ function Get-DisposableCandidates {
     return , @($candidates | Sort-Object WorkingSetMiB -Descending)
 }
 
-function Get-StartupSuggestions {
+function Get-StartupSuggestion {
     <#
     .SYNOPSIS
         Read-only startup inventory for the suggestion lever. We report; we do
@@ -165,7 +164,6 @@ function Get-StartupSuggestions {
     # Chrome background mode is a classic quiet win: it keeps running after the
     # window closes. We surface the state; changing it stays a manual/approved act.
     try {
-        $chromeBg = Get-ItemProperty -Path 'HKCU:\Software\Google\Chrome\PreferenceMACs' -ErrorAction SilentlyContinue
         $chromeReg = Get-ItemProperty -Path 'HKCU:\Software\Policies\Google\Chrome' -Name BackgroundModeEnabled -ErrorAction SilentlyContinue
         if ($chromeReg) {
             $items.Add([pscustomobject]@{
@@ -175,9 +173,11 @@ function Get-StartupSuggestions {
             })
         }
     }
-    catch { }
+    catch {
+        Write-Verbose "Could not read Chrome background-mode policy: $($_.Exception.Message)"
+    }
     return , $items.ToArray()
 }
 
 Export-ModuleMember -Function Test-SafetyGate, Test-CloseEligibility, Invoke-GracefulClose,
-    Get-DisposableCandidates, Get-StartupSuggestions
+    Get-DisposableCandidate, Get-StartupSuggestion

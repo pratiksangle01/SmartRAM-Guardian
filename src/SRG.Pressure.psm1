@@ -8,7 +8,7 @@
 
 Set-StrictMode -Version 2.0
 
-function Get-PressureSignals {
+function Get-PressureSignal {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]$Sample,
@@ -37,7 +37,7 @@ function Get-PressureAssessment {
         $LastActionTime = $null
     )
 
-    $signals = Get-PressureSignals -Sample $Sample -Config $Config
+    $signals = Get-PressureSignal -Sample $Sample -Config $Config
 
     # --- Level from signals, then apply hysteresis for de-escalation ---------
     $rawLevel = 'Normal'
@@ -106,7 +106,7 @@ function Get-PressureAssessment {
     }
 }
 
-function New-PressureState {
+function Get-InitialPressureState {
     return [pscustomobject]@{
         Level          = 'Normal'
         LastActionTime = $null
@@ -114,4 +114,4 @@ function New-PressureState {
     }
 }
 
-Export-ModuleMember -Function Get-PressureSignals, Get-PressureAssessment, New-PressureState
+Export-ModuleMember -Function Get-PressureSignal, Get-PressureAssessment, Get-InitialPressureState
