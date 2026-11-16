@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smartram-guardian"
+description = "Cross-platform background RAM guardian with a desktop pet"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = ["psutil>=5.9"]
+dynamic = ["version"]
+
+[project.scripts]
+smartram = "smartram.__main__:main"
+
+[tool.setuptools]
+packages = ["smartram"]
+
+[tool.setuptools.dynamic]
+version = { attr = "smartram.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

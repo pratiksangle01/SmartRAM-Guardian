@@ -2,52 +2,70 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   test:
-    name: Pester + PSScriptAnalyzer (Windows PowerShell 5.1)
-    runs-on: windows-latest
+    name: ${{ matrix.os }} / py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ['3.12']
+        include:
+          - os: ubuntu-22.04
+            python: '3.8'
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
 
-      - name: Show PowerShell version
-        shell: powershell
-        run: $PSVersionTable | Out-String | Write-Host
-
-      - name: Install PSScriptAnalyzer
-        shell: powershell
+      - name: Unit tests
         run: |
-          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
-          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force -AllowClobber
-          Get-Module -ListAvailable PSScriptAnalyzer | Select-Object Name, Version | Format-Table | Out-String | Write-Host
+          python -m pip install --upgrade pip
+          python -m pip install . pytest
+          python -m pytest -q
 
-      - name: PSScriptAnalyzer
-        shell: powershell
+      - name: Desktop pet opens (Linux)
+        if: runner.os == 'Linux'
         run: |
-          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error, Warning `
-            -ExcludeRule PSAvoidUsingWriteHost, PSAvoidUsingPositionalParameters
-          $results | Format-Table RuleName, Severity, ScriptName, Line, Message -AutoSize |
-            Out-String -Width 200 | Write-Host
-          if ($results.Count -gt 0) {
-            Write-Error "PSScriptAnalyzer reported $($results.Count) issue(s)."
-          }
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb python3-tk
+          xvfb-run -a python -m smartram widget-test
 
-      - name: Unit and end-to-end tests (Pester 3.4, built into PS 5.1)
-        shell: powershell
+      - name: Desktop pet opens (Windows, macOS)
+        if: runner.os != 'Linux'
+        run: python -m smartram widget-test
+
+      - name: Installer (Linux, macOS)
+        if: runner.os != 'Windows'
+        env:
+          SMARTRAM_SOURCE: ${{ github.workspace }}
+          SMARTRAM_HOME: ${{ runner.temp }}/smartram
         run: |
-          Import-Module Pester -RequiredVersion 3.4.0 -Force
-          $r = Invoke-Pester -Path .\tests -PassThru -Quiet
-          Write-Host ("Total={0} Passed={1} Failed={2} Skipped={3}" -f `
-            $r.TotalCount, $r.PassedCount, $r.FailedCount, $r.SkippedCount)
-          if ($r.FailedCount -gt 0) {
-            $r.TestResult | Where-Object { -not $_.Passed } |
-              ForEach-Object {
-                Write-Host "FAIL: $($_.Describe) / $($_.Name): $($_.FailureMessage)"
-                Write-Host $_.StackTrace
-              }
-            exit 1
-          }
+          sh install.sh
+          sleep 8
+          "$SMARTRAM_HOME/venv/bin/smartram" status
+          "$SMARTRAM_HOME/venv/bin/smartram" uninstall
+
+      - name: Installer (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        env:
+          SMARTRAM_SOURCE: ${{ github.workspace }}
+          SMARTRAM_HOME: ${{ runner.temp }}\smartram
+        run: |
+          .\install.ps1
+          Start-Sleep -Seconds 8
+          $smartram = Join-Path $env:SMARTRAM_HOME 'venv\Scripts\smartram.exe'
+          & $smartram status
+          if ($LASTEXITCODE -ne 0) { throw "status failed: $LASTEXITCODE" }
+          & $smartram uninstall
+          if ($LASTEXITCODE -ne 0) { throw "uninstall failed: $LASTEXITCODE" }
