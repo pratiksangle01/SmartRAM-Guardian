@@ -218,6 +218,13 @@ def test_panel_text_and_mood(world):
     assert mood({"paused": True}, 60) == "paused"
 
 
+def test_pet_art_is_png():
+    import base64
+    from smartram import pet_art
+    for name in ("OPEN", "BLINK", "PAUSED"):
+        assert base64.b64decode(getattr(pet_art, name)).startswith(b"\x89PNG")
+
+
 def test_cli_lists_scan_and_status(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("SMARTRAM_HOME", str(tmp_path))
     assert main(["allow", "Spotify.exe"]) == 0

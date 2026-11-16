@@ -4,7 +4,9 @@ from __future__ import annotations
 import sys
 import time
 
-SIZE = 56
+from . import pet_art
+
+SIZE = pet_art.SIZE
 DARK = "#14161c"
 TEXT = "#e5e7eb"
 MUTED = "#9ca3af"
@@ -83,6 +85,8 @@ class Widget:
         except tk.TclError:
             self._clear = DARK
 
+        self.art = {name: tk.PhotoImage(master=root, data=getattr(pet_art, name))
+                    for name in ("OPEN", "BLINK", "PAUSED")}
         mono = tkfont.nametofont("TkFixedFont").copy()
         mono.configure(size=9)
         bold = tkfont.nametofont("TkDefaultFont").copy()
@@ -205,24 +209,14 @@ class Widget:
         c, s = self.pet, SIZE
         paused = self.engine.paths.pause.exists()
         color = COLORS["paused" if paused else mood(snap, self.engine.cfg["act_above_percent"])]
-        dy = 0 if paused else (self.frame // 2) % 2  # gentle bob shows it is alive
-        blink = paused or self.frame % 10 == 0
-        working = bool(snap.get("closing"))
+        working = bool(snap.get("closing")) and not paused
+        # A gentle swim shows it is alive; it swims faster while closing something.
+        dy = 0 if paused else (self.frame // (1 if working else 2)) % 2 * 2
+        art = "PAUSED" if paused else "BLINK" if self.frame % 10 == 0 else "OPEN"
         c.delete("all")
-        for x1, x2, x3 in ((10, 15, 25), (s - 10, s - 15, s - 25)):
-            c.create_polygon(x1, 20 + dy, x2, 3 + dy, x3, 12 + dy, fill=color, outline="")
-        c.create_oval(5, 9 + dy, s - 5, s - 3 + dy, fill=color, outline="#0b0d12", width=2)
-        for x in (20, s - 20):
-            if blink:
-                c.create_line(x - 4, 29 + dy, x + 4, 29 + dy, fill="#0b0d12", width=2)
-            else:
-                c.create_oval(x - 4, 24 + dy, x + 4, 34 + dy, fill="#0b0d12", outline="")
-                c.create_oval(x - 1, 26 + dy, x + 2, 29 + dy, fill="white", outline="")
-        if working:
-            c.create_oval(s / 2 - 4, 37 + dy, s / 2 + 4, 45 + dy, fill="#0b0d12", outline="")
-        else:
-            c.create_arc(s / 2 - 6, 33 + dy, s / 2 + 6, 43 + dy, start=200, extent=140,
-                         style="arc", outline="#0b0d12", width=2)
+        c.create_image(s // 2, s // 2 + dy, image=self.art[art])
+        # Status dot: green fine, yellow busy, red high, grey paused.
+        c.create_oval(4, s - 15, 15, s - 4, fill=color, outline="#0b0d12", width=2)
 
     def _refresh(self):
         snap = self.engine.snapshot or {}
