@@ -90,7 +90,7 @@ Describe 'Process classifier' {
                 (New-FakeProcess -ProcessId 21 -Name 'tsserver' -ParentPid 20),
                 (New-FakeProcess -ProcessId 22 -Name 'node' -ParentPid 21)
             )
-            $ctx = Get-WorkContext -Processes $procs -Config $cfg -ForegroundPid 21
+            $ctx = Get-WorkContext -Processes $procs -ForegroundPid 21
             $ctx.ProtectedPidSet.ContainsKey(21) | Should Be $true
             $ctx.ProtectedPidSet.ContainsKey(20) | Should Be $true   # ancestor IDE
             $ctx.ProtectedPidSet.ContainsKey(22) | Should Be $true   # descendant build
@@ -102,7 +102,7 @@ Describe 'Process classifier' {
                 (New-FakeProcess -ProcessId 30 -Name 'orphanapp' -ParentPid 31 -StartTime ([datetime]'2026-05-01')),
                 (New-FakeProcess -ProcessId 31 -Name 'unrelatednew' -ParentPid 0 -StartTime ([datetime]'2026-06-01'))
             )
-            $ctx = Get-WorkContext -Processes $procs -Config $cfg -ForegroundPid 30
+            $ctx = Get-WorkContext -Processes $procs -ForegroundPid 30
             $ctx.ProtectedPidSet.ContainsKey(31) | Should Be $false
         }
 
@@ -113,7 +113,7 @@ Describe 'Process classifier' {
                 (New-FakeProcess -ProcessId 41 -Name 'svchost' -ParentPid 40),
                 (New-FakeProcess -ProcessId 42 -Name 'someapp' -ParentPid 41)
             )
-            $ctx = Get-WorkContext -Processes $procs -Config $cfg -ForegroundPid 42
+            $ctx = Get-WorkContext -Processes $procs -ForegroundPid 42
             $ctx.ProtectedPidSet.ContainsKey(41) | Should Be $true
             $ctx.ProtectedPidSet.ContainsKey(40) | Should Be $false   # never pull the service host in
         }
@@ -122,34 +122,34 @@ Describe 'Process classifier' {
     Context 'Installer / build / copy protection' {
         It 'detects msiexec by name' {
             $procs = @((New-FakeProcess -Name 'msiexec' -CommandLine 'msiexec /i app.msi'))
-            $r = Get-ActiveSensitiveOperations -Processes $procs
+            $r = Get-ActiveSensitiveOperation -Processes $procs
             $r.Count | Should Be 1
             $r[0] | Should Match 'installer'
         }
 
         It 'detects TiWorker / TrustedInstaller servicing' {
             $procs = @((New-FakeProcess -Name 'TiWorker'))
-            (Get-ActiveSensitiveOperations -Processes $procs)[0] | Should Match 'installer'
+            (Get-ActiveSensitiveOperation -Processes $procs)[0] | Should Match 'installer'
         }
 
         It 'detects a setup.exe command line' {
             $procs = @((New-FakeProcess -Name 'setup' -CommandLine 'C:\Temp\setup.exe /S'))
-            (Get-ActiveSensitiveOperations -Processes $procs)[0] | Should Match 'installer'
+            (Get-ActiveSensitiveOperation -Processes $procs)[0] | Should Match 'installer'
         }
 
         It 'detects an active build from the command line' {
             $procs = @((New-FakeProcess -Name 'dotnet' -CommandLine 'dotnet build SmartRAM.sln -c Release'))
-            (Get-ActiveSensitiveOperations -Processes $procs)[0] | Should Match 'build'
+            (Get-ActiveSensitiveOperation -Processes $procs)[0] | Should Match 'build'
         }
 
         It 'detects a large copy' {
             $procs = @((New-FakeProcess -Name 'robocopy' -CommandLine 'robocopy D:\src E:\dst /MIR'))
-            (Get-ActiveSensitiveOperations -Processes $procs)[0] | Should Match 'copy'
+            (Get-ActiveSensitiveOperation -Processes $procs)[0] | Should Match 'copy'
         }
 
         It 'returns nothing when the machine is idle' {
             $procs = @((New-FakeProcess -Name 'notepad' -CommandLine 'notepad.exe'))
-            (Get-ActiveSensitiveOperations -Processes $procs).Count | Should Be 0
+            (Get-ActiveSensitiveOperation -Processes $procs).Count | Should Be 0
         }
     }
 }

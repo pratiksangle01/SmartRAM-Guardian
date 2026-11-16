@@ -150,7 +150,7 @@ function Test-CommandLineMatch {
     return $false
 }
 
-function Get-ActiveSensitiveOperations {
+function Get-ActiveSensitiveOperation {
     <#
     .SYNOPSIS
         Detects installers, builds and large copies that must freeze ALL actions.
@@ -224,4 +224,4 @@ function Get-ProcessClassification {
 }
 
 Export-ModuleMember -Function Get-ProtectedNameSet, Get-ForegroundTree, Get-ProcessClass,
-    Get-ProcessClassification, Get-ActiveSensitiveOperations, Test-CommandLineMatch
+    Get-ProcessClassification, Get-ActiveSensitiveOperation, Test-CommandLineMatch

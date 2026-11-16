@@ -112,7 +112,7 @@ try {
         $pressureState.Level = $assessment.Level
         $pressureState.Samples++
 
-        $context = Get-WorkContext -Processes $sample.Processes -Config $config -ForegroundPid $sample.ForegroundPid
+        $context = Get-WorkContext -Processes $sample.Processes -ForegroundPid $sample.ForegroundPid
         $classified = Get-ProcessClassification -Processes $sample.Processes -Config $config -ForegroundPid $sample.ForegroundPid
         $gate = Test-SafetyGate -Config $config -Processes $sample.Processes -Assessment $assessment -RootPath $root
 
@@ -158,7 +158,7 @@ try {
                             Add-Member -InputObject $t -NotePropertyName MainWindowTitle `
                                 -NotePropertyValue (Get-ProcessWindowTitle -ProcessId $t.Pid) -Force
                         }
-                        $elig = Test-CloseEligibility -Process $t -Config $config -Class $t.Class
+                        $elig = Test-CloseEligibility -Process $t -Class $t.Class
                         if (-not $elig.Eligible) {
                             Write-SRGLog -Level INFO -Category 'action' -Message "skip $($t.Name) (pid $($t.Pid)): $($elig.Reason)"
                             continue
