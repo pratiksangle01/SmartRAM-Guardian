@@ -37,11 +37,11 @@ $sampleMs = $sw.ElapsedMilliseconds
 $sample = $second[0]
 
 $assessment = Get-PressureAssessment -Sample $sample -Config $config
-$context = Get-WorkContext -Processes $sample.Processes -Config $config -ForegroundPid $sample.ForegroundPid
+$context = Get-WorkContext -Processes $sample.Processes -ForegroundPid $sample.ForegroundPid
 $classified = Get-ProcessClassification -Processes $sample.Processes -Config $config -ForegroundPid $sample.ForegroundPid
 $gate = Test-SafetyGate -Config $config -Processes $sample.Processes -Assessment $assessment -RootPath $root
-$candidates = Get-DisposableCandidates -ClassifiedProcesses $classified
-$sensitive = Get-ActiveSensitiveOperations -Processes $sample.Processes
+$candidates = Get-DisposableCandidate -ClassifiedProcesses $classified
+$sensitive = Get-ActiveSensitiveOperation -Processes $sample.Processes
 
 Write-Host ("sample cost  : {0} ms cold / {1} ms steady-state (guardian overhead per pass)" -f $firstMs, $sampleMs)
 Write-Host ("memory       : {0}/{1} MiB available, commit {2}%, pages-in {3}/s" -f $sample.AvailableMiB, $sample.TotalMiB, $sample.CommitPercent, [int]$sample.PagesInputPerSec)
@@ -75,7 +75,7 @@ else {
     Write-Host "  Closing still only happens in 'allowlisted-close' mode, gracefully, when pressure is real."
 }
 
-$lowerTargets = Get-PriorityLoweringTargets -ClassifiedProcesses $classified -Processes $sample.Processes
+$lowerTargets = Get-PriorityLoweringTarget -ClassifiedProcesses $classified -Processes $sample.Processes
 Write-Host ''
 Write-Host ('Memory-priority lever (config: EnableEcoQoS = {0}):' -f $config.EnableEcoQoS) -ForegroundColor Cyan
 if ($lowerTargets.Count -eq 0) {

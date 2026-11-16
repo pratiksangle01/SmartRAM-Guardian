@@ -6,7 +6,7 @@ foreach ($m in 'SRG.Config', 'SRG.Logging', 'SRG.Sampler', 'SRG.Pressure', 'SRG.
     Import-Module (Join-Path $script:RepoRoot "src\$m.psm1") -Force -DisableNameChecking
 }
 
-function New-FakeProcess {
+function Get-FakeProcess {
     param(
         [int]$ProcessId = 1000,
         [string]$Name = 'someapp',
@@ -33,7 +33,7 @@ function New-FakeProcess {
     }
 }
 
-function New-FakeSample {
+function Get-FakeSample {
     param(
         [double]$AvailableMiB = 2000,
         [double]$TotalMiB = 8000,

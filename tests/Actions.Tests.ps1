@@ -7,7 +7,7 @@ Describe 'Safety gate' {
     Context 'Observe mode' {
         It 'is always closed in observe mode' {
             $cfg = Get-TestConfig -Mode 'observe'
-            $sample = New-FakeSample -AvailableMiB 300 -CommitPercent 95 -PagesInputPerSec 4000
+            $sample = Get-FakeSample -AvailableMiB 300 -CommitPercent 95 -PagesInputPerSec 4000
             $a = Get-PressureAssessment -Sample $sample -Config $cfg
             $gate = Test-SafetyGate -Config $cfg -Processes $sample.Processes -Assessment $a -RootPath $TestDrive
             $gate.Open | Should Be $false
@@ -18,8 +18,8 @@ Describe 'Safety gate' {
     Context 'Installer-running protection' {
         It 'closes the gate for every mode while an installer is running' {
             $cfg = Get-TestConfig -Mode 'allowlisted-close' -AllowlistClose @('Spotify')
-            $procs = @((New-FakeProcess -Name 'msiexec' -CommandLine 'msiexec /i setup.msi'))
-            $sample = New-FakeSample -AvailableMiB 300 -CommitPercent 95 -PagesInputPerSec 4000 -Processes $procs
+            $procs = @((Get-FakeProcess -Name 'msiexec' -CommandLine 'msiexec /i setup.msi'))
+            $sample = Get-FakeSample -AvailableMiB 300 -CommitPercent 95 -PagesInputPerSec 4000 -Processes $procs
             $a = Get-PressureAssessment -Sample $sample -Config $cfg
             $gate = Test-SafetyGate -Config $cfg -Processes $procs -Assessment $a -RootPath $TestDrive
             $gate.Open | Should Be $false
@@ -28,8 +28,8 @@ Describe 'Safety gate' {
 
         It 'closes the gate during an active build' {
             $cfg = Get-TestConfig -Mode 'safe-auto'
-            $procs = @((New-FakeProcess -Name 'dotnet' -CommandLine 'dotnet build -c Release'))
-            $sample = New-FakeSample -AvailableMiB 300 -CommitPercent 95 -PagesInputPerSec 4000 -Processes $procs
+            $procs = @((Get-FakeProcess -Name 'dotnet' -CommandLine 'dotnet build -c Release'))
+            $sample = Get-FakeSample -AvailableMiB 300 -CommitPercent 95 -PagesInputPerSec 4000 -Processes $procs
             $a = Get-PressureAssessment -Sample $sample -Config $cfg
             $gate = Test-SafetyGate -Config $cfg -Processes $procs -Assessment $a -RootPath $TestDrive
             $gate.Open | Should Be $false
@@ -42,7 +42,7 @@ Describe 'Safety gate' {
             $cfg = Get-TestConfig -Mode 'safe-auto'
             $marker = Join-Path $TestDrive $cfg.PauseFile
             Set-Content -LiteralPath $marker -Value 'paused' -Encoding ASCII
-            $sample = New-FakeSample -AvailableMiB 300 -CommitPercent 95 -PagesInputPerSec 4000
+            $sample = Get-FakeSample -AvailableMiB 300 -CommitPercent 95 -PagesInputPerSec 4000
             $a = Get-PressureAssessment -Sample $sample -Config $cfg
             $gate = Test-SafetyGate -Config $cfg -Processes $sample.Processes -Assessment $a -RootPath $TestDrive
             $gate.Open | Should Be $false
@@ -52,7 +52,7 @@ Describe 'Safety gate' {
 
         It 'reopens after the pause marker is removed' {
             $cfg = Get-TestConfig -Mode 'safe-auto'
-            $sample = New-FakeSample -AvailableMiB 300 -CommitPercent 95 -PagesInputPerSec 4000
+            $sample = Get-FakeSample -AvailableMiB 300 -CommitPercent 95 -PagesInputPerSec 4000
             $a = Get-PressureAssessment -Sample $sample -Config $cfg
             $gate = Test-SafetyGate -Config $cfg -Processes $sample.Processes -Assessment $a -RootPath $TestDrive
             $gate.Open | Should Be $true
@@ -62,7 +62,7 @@ Describe 'Safety gate' {
     Context 'Cooldown' {
         It 'closes the gate while cooldown is active' {
             $cfg = Get-TestConfig -Mode 'safe-auto'
-            $sample = New-FakeSample -AvailableMiB 300 -CommitPercent 95 -PagesInputPerSec 4000
+            $sample = Get-FakeSample -AvailableMiB 300 -CommitPercent 95 -PagesInputPerSec 4000
             $a = Get-PressureAssessment -Sample $sample -Config $cfg -LastActionTime (Get-Date).AddSeconds(-5)
             $gate = Test-SafetyGate -Config $cfg -Processes $sample.Processes -Assessment $a -RootPath $TestDrive
             $gate.Open | Should Be $false
@@ -75,24 +75,21 @@ Describe 'Graceful close eligibility' {
 
     Context 'Allowlisted app' {
         It 'is eligible when it is allowlisted, has a window and no unsaved marker' {
-            $cfg = Get-TestConfig -Mode 'allowlisted-close' -AllowlistClose @('Spotify')
-            $p = New-FakeProcess -Name 'Spotify' -HasMainWindow $true -MainWindowTitle 'Spotify Premium'
-            $e = Test-CloseEligibility -Process $p -Config $cfg -Class 'Disposable'
+            $p = Get-FakeProcess -Name 'Spotify' -HasMainWindow $true -MainWindowTitle 'Spotify Premium'
+            $e = Test-CloseEligibility -Process $p -Class 'Disposable'
             $e.Eligible | Should Be $true
         }
 
         It 'is skipped when the window title suggests unsaved work' {
-            $cfg = Get-TestConfig -Mode 'allowlisted-close' -AllowlistClose @('Editor')
-            $p = New-FakeProcess -Name 'Editor' -HasMainWindow $true -MainWindowTitle '*untitled-1 - Editor'
-            $e = Test-CloseEligibility -Process $p -Config $cfg -Class 'Disposable'
+            $p = Get-FakeProcess -Name 'Editor' -HasMainWindow $true -MainWindowTitle '*untitled-1 - Editor'
+            $e = Test-CloseEligibility -Process $p -Class 'Disposable'
             $e.Eligible | Should Be $false
             $e.Reason | Should Match 'unsaved'
         }
 
         It 'is skipped when the process has no main window' {
-            $cfg = Get-TestConfig -Mode 'allowlisted-close' -AllowlistClose @('Spotify')
-            $p = New-FakeProcess -Name 'Spotify' -HasMainWindow $false -MainWindowTitle ''
-            $e = Test-CloseEligibility -Process $p -Config $cfg -Class 'Disposable'
+            $p = Get-FakeProcess -Name 'Spotify' -HasMainWindow $false -MainWindowTitle ''
+            $e = Test-CloseEligibility -Process $p -Class 'Disposable'
             $e.Eligible | Should Be $false
             $e.Reason | Should Match 'no main window'
         }
@@ -100,10 +97,9 @@ Describe 'Graceful close eligibility' {
 
     Context 'Non-allowlisted classes are never eligible' {
         It 'refuses Protected, ActiveWork, SuggestionOnly and Unknown' {
-            $cfg = Get-TestConfig -Mode 'allowlisted-close'
-            $p = New-FakeProcess -Name 'Anything' -HasMainWindow $true
+            $p = Get-FakeProcess -Name 'Anything' -HasMainWindow $true
             foreach ($cls in 'Protected', 'ActiveWork', 'SuggestionOnly', 'Unknown') {
-                $e = Test-CloseEligibility -Process $p -Config $cfg -Class $cls
+                $e = Test-CloseEligibility -Process $p -Class $cls
                 $e.Eligible | Should Be $false
             }
         }

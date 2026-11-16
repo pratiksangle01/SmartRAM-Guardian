@@ -21,7 +21,6 @@ $root = $PSScriptRoot
 $configPath = Join-Path $root 'config.json'
 Import-Module (Join-Path $root 'src\SRG.Config.psm1') -Force
 Import-Module (Join-Path $root 'src\SRG.Classifier.psm1') -Force -DisableNameChecking
-$x = $null
 
 $json = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
 $current = @($json.AllowlistClose)

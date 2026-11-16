@@ -2,10 +2,12 @@
 . "$PSScriptRoot\TestHelpers.ps1"
 
 function New-FakeStateFile {
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory = $true)][string]$Path,
         [int]$AgeSeconds = 0
     )
+    if (-not $PSCmdlet.ShouldProcess($Path, 'Create fake state file')) { return }
     $state = [ordered]@{
         timestamp          = (Get-Date).ToString('s')
         mode               = 'observe'
@@ -46,8 +48,10 @@ Describe 'status.ps1' {
     $statusScript = Join-Path $script:RepoRoot 'status.ps1'
 
     function New-StatusRoot {
+        [CmdletBinding(SupportsShouldProcess = $true)]
         param([string]$Name)
         $root = Join-Path $TestDrive $Name
+        if (-not $PSCmdlet.ShouldProcess($root, 'Create status test root')) { return }
         New-Item -ItemType Directory -Path $root -Force | Out-Null
         Copy-Item (Join-Path $script:RepoRoot 'config.json') (Join-Path $root 'config.json')
         return $root

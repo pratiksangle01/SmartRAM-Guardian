@@ -99,11 +99,12 @@ namespace SRG.Native {
 }
 
 function Set-SRGProcessMemoryPriority {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory = $true)][int]$ProcessId,
         [ValidateSet(1, 2, 3, 4, 5)][int]$Priority = 2
     )
+    if (-not $PSCmdlet.ShouldProcess("process $ProcessId", "Set memory priority to $Priority")) { return }
     $err = $null
     $ok = [SRG.Native.Priority]::SetMemoryPriority($ProcessId, [uint32]$Priority, [ref]$err)
     return [pscustomobject]@{ Success = $ok; Error = $err; Priority = $Priority }
@@ -117,11 +118,12 @@ function Get-SRGProcessMemoryPriority {
 }
 
 function Set-SRGProcessEcoQoSMode {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory = $true)][int]$ProcessId,
         [bool]$Enabled = $true
     )
+    if (-not $PSCmdlet.ShouldProcess("process $ProcessId", "Set EcoQoS enabled to $Enabled")) { return }
     $err = $null
     $ok = [SRG.Native.Priority]::SetEcoQos($ProcessId, $Enabled, [ref]$err)
     return [pscustomobject]@{ Success = $ok; Error = $err }
@@ -150,7 +152,7 @@ function Test-HasWindowedAncestor {
     return $false
 }
 
-function Get-PriorityLoweringTargets {
+function Get-PriorityLoweringTarget {
     <#
     .SYNOPSIS
         Pure selection: which processes may have their memory priority lowered.
@@ -224,6 +226,6 @@ function Invoke-PriorityLowering {
     return , $applied.ToArray()
 }
 
-Export-ModuleMember -Function Get-PriorityLoweringTargets, Invoke-PriorityLowering,
+Export-ModuleMember -Function Get-PriorityLoweringTarget, Invoke-PriorityLowering,
     Set-SRGProcessMemoryPriority, Get-SRGProcessMemoryPriority, Set-SRGProcessEcoQoSMode,
     Test-HasWindowedAncestor
