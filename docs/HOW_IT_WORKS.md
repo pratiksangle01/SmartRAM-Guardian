@@ -79,7 +79,7 @@ critical commit is accepted on its own.
 Escalation is immediate. De-escalation is one step at a time and only when the
 reading is clearly outside the band being left:
 
-- `Critical -> Warn` requires available ≥ critical + `HysteresisMiB` **or**
+- `Critical -> Warn` requires available ≥ critical + `HysteresisMiB` **and**
   commit ≤ critical − `HysteresisCommitPercent`
 - `Warn -> Normal` requires available ≥ warn + `HysteresisMiB` **and**
   commit ≤ warn − `HysteresisCommitPercent`

@@ -49,7 +49,7 @@ function Get-PressureAssessment {
     if ($rank[$rawLevel] -lt $rank[$PreviousLevel]) {
         # De-escalating: require the reading to be clearly out of the band we
         # are leaving, not just a hair above the threshold, to avoid flapping.
-        $clearOfCritical = ($Sample.AvailableMiB -ge ($Config.CriticalAvailableMiB + $Config.HysteresisMiB)) -or
+        $clearOfCritical = ($Sample.AvailableMiB -ge ($Config.CriticalAvailableMiB + $Config.HysteresisMiB)) -and
                            ($Sample.CommitPercent -le ($Config.CriticalCommitPercent - $Config.HysteresisCommitPercent))
         $clearOfWarn = ($Sample.AvailableMiB -ge ($Config.WarnAvailableMiB + $Config.HysteresisMiB)) -and
                        ($Sample.CommitPercent -le ($Config.WarnCommitPercent - $Config.HysteresisCommitPercent))

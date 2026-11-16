@@ -56,10 +56,27 @@ Describe 'Pressure assessment' {
     }
 
     Context 'Hysteresis' {
-        It 'stays Critical until the machine is clearly clear of the band' {
+        It 'does not let healthy available memory bypass critical commit hysteresis' {
             $cfg = Get-TestConfig
-            # 1000 MiB is below warn(1536)+hysteresis(256) => must not drop.
-            $sample = New-FakeSample -AvailableMiB 1000 -CommitPercent 50 -PagesInputPerSec 0
+            $sample = New-FakeSample -AvailableMiB 3000 -CommitPercent ($cfg.CriticalCommitPercent - 1)
+            $a = Get-PressureAssessment -Sample $sample -Config $cfg -PreviousLevel 'Critical'
+            $a.RawLevel | Should Be 'Warn'
+            $a.Level | Should Be 'Critical'
+        }
+
+        It 'does not let healthy commit bypass critical available-memory hysteresis' {
+            $cfg = Get-TestConfig
+            $sample = New-FakeSample -AvailableMiB ($cfg.CriticalAvailableMiB + 1) -CommitPercent 40
+            $a = Get-PressureAssessment -Sample $sample -Config $cfg -PreviousLevel 'Critical'
+            $a.RawLevel | Should Be 'Warn'
+            $a.Level | Should Be 'Critical'
+        }
+
+        It 'drops to Warn when both critical hysteresis margins are met' {
+            $cfg = Get-TestConfig
+            $sample = New-FakeSample `
+                -AvailableMiB ($cfg.CriticalAvailableMiB + $cfg.HysteresisMiB) `
+                -CommitPercent ($cfg.CriticalCommitPercent - $cfg.HysteresisCommitPercent)
             $a = Get-PressureAssessment -Sample $sample -Config $cfg -PreviousLevel 'Critical'
             $a.Level | Should Be 'Warn'
         }
