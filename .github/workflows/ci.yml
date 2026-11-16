@@ -44,6 +44,15 @@ jobs:
         if: runner.os != 'Linux'
         run: python -m smartram widget-test
 
+      # The guardian must stay light: fail if it uses over 5% of a core or 250 MB.
+      - name: Own footprint (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python tools/footprint.py 45 5 250
+
+      - name: Own footprint (Windows, macOS)
+        if: runner.os != 'Linux'
+        run: python tools/footprint.py 45 5 250
+
       - name: Installer (Linux, macOS)
         if: runner.os != 'Windows'
         env:
@@ -53,6 +62,8 @@ jobs:
           sh install.sh
           sleep 8
           "$SMARTRAM_HOME/venv/bin/smartram" status
+          "$SMARTRAM_HOME/venv/bin/smartram" doctor
+          cat "$SMARTRAM_HOME/guardian.log"
           "$SMARTRAM_HOME/venv/bin/smartram" uninstall
 
       - name: Installer (Windows)
@@ -67,5 +78,7 @@ jobs:
           $smartram = Join-Path $env:SMARTRAM_HOME 'venv\Scripts\smartram.exe'
           & $smartram status
           if ($LASTEXITCODE -ne 0) { throw "status failed: $LASTEXITCODE" }
+          & $smartram doctor
+          Get-Content (Join-Path $env:SMARTRAM_HOME 'guardian.log')
           & $smartram uninstall
           if ($LASTEXITCODE -ne 0) { throw "uninstall failed: $LASTEXITCODE" }

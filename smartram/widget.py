@@ -1,10 +1,13 @@
-"""Desktop pet: a small always-on-top face that expands into a status panel on click."""
+"""Desktop pet: a small always-on-top dolphin that expands into a status panel on click."""
 from __future__ import annotations
 
+import logging
 import sys
 import time
 
 from . import pet_art
+
+log = logging.getLogger("smartram")
 
 SIZE = pet_art.SIZE
 DARK = "#14161c"
@@ -13,6 +16,7 @@ MUTED = "#9ca3af"
 KEY = "#010203"  # colour made see-through on Windows
 COLORS = {"ok": "#4ade80", "busy": "#fbbf24", "high": "#f87171", "paused": "#9ca3af"}
 ROWS = 5
+BAR = 280
 
 
 def fmt_bytes(n):
@@ -36,6 +40,16 @@ def panel_text(snap):
     for name in snap.get("closing") or []:
         lines.insert(0, "%-17s %8s  %s" % (name[:17], "", "closing..."))
     kept = [_row(k["name"], k["bytes"], k["reason"]) for k in (snap.get("kept") or [])[:ROWS]]
+    tips = [_row(s["name"], s["bytes"], "idle %d min" % s["idle_minutes"])
+            for s in snap.get("suggest") or []]
+    if tips:
+        tips.append("to close these too: smartram allow <app>")
+    own = snap.get("self") or {}
+    own_text = "Guardian itself: %s" % fmt_bytes(own.get("rss"))
+    if own.get("cpu") is not None:
+        own_text += ", %.1f%% CPU" % own["cpu"]
+    if snap.get("battery"):
+        own_text += ", battery saver"
     return {
         "status": snap.get("note", "starting..."),
         "ram": "RAM %.0f%%   %s of %s used" % (mem.get("percent", 0),
@@ -46,6 +60,8 @@ def panel_text(snap):
         "closed_title": "Closed (%d)" % snap.get("closed_total", 0),
         "closed": "\n".join(lines[:ROWS]) or "nothing yet",
         "kept": "\n".join(kept) or "-",
+        "tips": "\n".join(tips),
+        "self": own_text,
     }
 
 
@@ -64,6 +80,7 @@ class Widget:
         import tkinter.font as tkfont
         self.tk, self.engine, self.stop = tk, engine, stop_event
         self.expanded, self.frame, self._drag = False, 0, None
+        self._pet_state = self._shown = None  # what is drawn now; redraw only on change
 
         root = self.root = tk.Tk()
         root.title("SmartRAM Guardian")
@@ -93,6 +110,9 @@ class Widget:
         bold.configure(size=10, weight="bold")
 
         self.pet = tk.Canvas(root, width=SIZE, height=SIZE, highlightthickness=0, bd=0)
+        self._img = self.pet.create_image(SIZE // 2, SIZE // 2, image=self.art["OPEN"])
+        # Status dot: green fine, yellow busy, red high, grey paused.
+        self._dot = self.pet.create_oval(4, SIZE - 15, 15, SIZE - 4, outline="#0b0d12", width=2)
         self.head = tk.Frame(root, bg=DARK)
         tk.Label(self.head, text="SmartRAM Guardian", font=bold, bg=DARK, fg=TEXT,
                  anchor="w").pack(fill="x", padx=8)
@@ -101,8 +121,9 @@ class Widget:
 
         self.panel = tk.Frame(root, bg=DARK)
         self._label(self.panel, "ram", mono, TEXT).pack(fill="x", padx=10, pady=(6, 2))
-        self.bar = tk.Canvas(self.panel, height=6, width=280, bg="#2a2e39",
+        self.bar = tk.Canvas(self.panel, height=6, width=BAR, bg="#2a2e39",
                              highlightthickness=0, bd=0)
+        self._fill = self.bar.create_rectangle(0, 0, 0, 6, outline="")
         self.bar.pack(padx=10, pady=2)
         self._label(self.panel, "saved", mono, COLORS["ok"]).pack(fill="x", padx=10)
         self._label(self.panel, "focus", mono, TEXT).pack(fill="x", padx=10, pady=(0, 6))
@@ -111,10 +132,18 @@ class Widget:
         tk.Label(self.panel, text="Kept running", font=bold, bg=DARK, fg=TEXT,
                  anchor="w").pack(fill="x", padx=10, pady=(6, 0))
         self._label(self.panel, "kept", mono, MUTED).pack(fill="x", padx=10)
+        # Shown only while there is something to suggest.
+        self.tips = tk.Frame(self.panel, bg=DARK)
+        tk.Label(self.tips, text="Idle in the background", font=bold, bg=DARK, fg=TEXT,
+                 anchor="w").pack(fill="x", padx=10, pady=(6, 0))
+        self._label(self.tips, "tips", mono, COLORS["busy"]).pack(fill="x", padx=10)
+        self.footer = self._label(self.panel, "self", mono, "#6b7280")
+        self.footer.pack(fill="x", padx=10, pady=(6, 0))
         buttons = tk.Frame(self.panel, bg=DARK)
         buttons.pack(fill="x", padx=10, pady=8)
         self.pause_btn = self._button(buttons, "Pause", self._toggle_pause)
         self.pause_btn.pack(side="left")
+        self._button(buttons, "Clean now", self._clean_now).pack(side="left", padx=6)
         self._button(buttons, "Quit", self._quit).pack(side="right")
 
         self.pet.bind("<ButtonPress-1>", self._press)
@@ -151,6 +180,7 @@ class Widget:
             self.pet.configure(bg=self._clear)
             root.configure(bg=self._clear)
             self.pet.grid(row=0, column=0)
+            self._size = (SIZE, SIZE)
             root.geometry("%dx%d+%d+%d" % (SIZE, SIZE, self.px, self.py))
             return
         right, bottom = self.px + SIZE / 2 > sw / 2, self.py + SIZE / 2 > sh / 2
@@ -161,14 +191,18 @@ class Widget:
         self.head.grid(row=row, column=0 if right else 1, sticky="ew")
         self.panel.grid(row=1, column=0, columnspan=2, sticky="ew")
         root.update_idletasks()
-        w, h = root.winfo_reqwidth(), root.winfo_reqheight()
+        w, h = self._size = (root.winfo_reqwidth(), root.winfo_reqheight())
         x = self.px + SIZE - w if right else self.px
         y = self.py + SIZE - h if bottom else self.py
         root.geometry("%dx%d+%d+%d" % (w, h, max(0, x), max(0, y)))
 
     def toggle(self):
         self.expanded = not self.expanded
-        self._refresh()
+        # While the panel is open the engine keeps its details fresh; closed, it rests.
+        self.engine.watching = self.expanded
+        if self.expanded:
+            self._fill_panel()
+            self.engine.wake()
         self._layout()
 
     def _press(self, e):
@@ -190,6 +224,9 @@ class Widget:
         if not moved:
             self.toggle()
 
+    def _paused(self):
+        return self.engine.paths.pause.exists()
+
     def _toggle_pause(self):
         pause = self.engine.paths.pause
         try:
@@ -199,63 +236,92 @@ class Widget:
                 pause.write_text("paused from widget", encoding="utf-8")
         except OSError:
             pass
-        self._refresh()
+        self._draw_pet()
+        if self.expanded:
+            self._fill_panel()
+        self.engine.wake()
+
+    def _clean_now(self):
+        try:
+            self.engine.paths.clean.write_text("clean", encoding="utf-8")
+        except OSError:
+            pass
+        self.engine.wake()
 
     def _quit(self):
         self.stop.set()
+        self.engine.wake()
         self.root.destroy()
 
-    def _draw_pet(self, snap):
-        c, s = self.pet, SIZE
-        paused = self.engine.paths.pause.exists()
+    def _draw_pet(self, blink=False):
+        snap = self.engine.snapshot or {}
+        paused = self._paused()
         color = COLORS["paused" if paused else mood(snap, self.engine.cfg["act_above_percent"])]
         working = bool(snap.get("closing")) and not paused
         # A gentle swim shows it is alive; it swims faster while closing something.
         dy = 0 if paused else (self.frame // (1 if working else 2)) % 2 * 2
-        art = "PAUSED" if paused else "BLINK" if self.frame % 10 == 0 else "OPEN"
-        c.delete("all")
-        c.create_image(s // 2, s // 2 + dy, image=self.art[art])
-        # Status dot: green fine, yellow busy, red high, grey paused.
-        c.create_oval(4, s - 15, 15, s - 4, fill=color, outline="#0b0d12", width=2)
+        art = "PAUSED" if paused else "BLINK" if blink else "OPEN"
+        state = (art, dy, color)
+        if state != self._pet_state:
+            self._pet_state = state
+            self.pet.itemconfigure(self._img, image=self.art[art])
+            self.pet.coords(self._img, SIZE // 2, SIZE // 2 + dy)
+            self.pet.itemconfigure(self._dot, fill=color)
 
-    def _refresh(self):
+    def _fill_panel(self):
         snap = self.engine.snapshot or {}
-        self._draw_pet(snap)
-        if not self.expanded:
-            return
+        paused = self._paused()
+        self._shown = (snap.get("updated"), paused)
         text = panel_text(snap)
         for key, lbl in self.labels.items():
             lbl.configure(text=text[key])
-        paused = self.engine.paths.pause.exists()
+        if text["tips"]:
+            self.tips.pack(fill="x", before=self.footer)
+        else:
+            self.tips.pack_forget()
         self.pause_btn.configure(text="Resume" if paused else "Pause")
         pct = (snap.get("mem") or {}).get("percent", 0)
-        self.bar.delete("all")
-        self.bar.create_rectangle(0, 0, 280 * pct / 100.0, 6, outline="",
-                                  fill=COLORS[mood(snap, self.engine.cfg["act_above_percent"])])
+        self.bar.coords(self._fill, 0, 0, BAR * pct / 100.0, 6)
+        self.bar.itemconfigure(
+            self._fill, fill=COLORS[mood(snap, self.engine.cfg["act_above_percent"])])
+
+    def _refresh_panel(self):
+        """Rewrite the open panel only when its data changed."""
+        snap = self.engine.snapshot or {}
+        if (snap.get("updated"), self._paused()) == self._shown:
+            return
+        self._fill_panel()
+        self.root.update_idletasks()
+        if (self.root.winfo_reqwidth(), self.root.winfo_reqheight()) != self._size:
+            self._layout()
 
     def _tick(self):
         if self.stop.is_set():
             self.root.destroy()
             return
         self.frame += 1
-        before = self.root.winfo_reqheight()
-        self._refresh()
+        blink = self.frame % 10 == 0
+        self._draw_pet(blink)
+        if blink:
+            self.root.after(160, self._draw_pet)
         if self.expanded:
-            self.root.update_idletasks()
-            if self.root.winfo_reqheight() != before:
-                self._layout()
-        self.root.lift()
-        self.root.after(400, self._tick)
+            self._refresh_panel()
+        if self.frame % 6 == 0:
+            self.root.lift()
+        # Half the animation rate on battery.
+        on_battery = (self.engine.snapshot or {}).get("battery")
+        self.root.after(1000 if on_battery else 500, self._tick)
 
     def run(self):
         self.root.mainloop()
 
 
 def run(engine, stop_event, selftest=0):
-    """Show the pet until quit. Returns False when no display is available."""
+    """Show the pet until quit. Returns False when it cannot be shown."""
     try:
         widget = Widget(engine, stop_event, selftest)
-    except Exception:
+    except Exception as e:
+        log.warning("running without the desktop pet: %s: %s", type(e).__name__, e)
         return False
     widget.run()
     return True

@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 from collections import namedtuple
 
@@ -21,10 +22,28 @@ Proc = namedtuple("Proc", "pid ppid name norm rss cpu create")
 
 MIN_AGE_SECONDS = 60
 HISTORY = 30
+SUGGEST_MIN_BYTES = 200 * 2**20
+SUGGEST_IDLE_SECONDS = 15 * 60
+MAX_SLOWDOWN = 8
+HIGH_PERCENT = 90  # RAM this full is watched at the fast interval
+RAM_FINE = "RAM is fine"
 
 
 def make_proc(pid, name, rss=0, cpu=0.0, ppid=1, create=0.0):
     return Proc(pid, ppid, name, rules.normalize(name), rss, cpu, create)
+
+
+def read_memory():
+    vm = psutil.virtual_memory()
+    return {"total": vm.total, "available": vm.available, "percent": vm.percent}
+
+
+def on_battery():
+    try:
+        battery = psutil.sensors_battery()
+        return battery is not None and battery.power_plugged is False
+    except Exception:
+        return False
 
 
 class Sampler:
@@ -38,8 +57,6 @@ class Sampler:
         now = time.monotonic()
         dt = (now - self._t) if self._t else None
         self._t = now
-        vm = psutil.virtual_memory()
-        mem = {"total": vm.total, "available": vm.available, "percent": vm.percent}
         procs, seen = [], {}
         attrs = ["pid", "ppid", "name", "memory_info", "cpu_times", "create_time", "status"]
         for p in psutil.process_iter(attrs):
@@ -58,7 +75,48 @@ class Sampler:
             procs.append(make_proc(i["pid"], i["name"], mi.rss if mi else 0, cpu,
                                    i.get("ppid") or 0, key[1]))
         self._prev = seen
-        return mem, procs
+        return read_memory(), procs
+
+
+class SelfMeter:
+    """CPU and memory used by the guardian itself, including its helper commands."""
+
+    def __init__(self):
+        self._proc = psutil.Process()
+        self._cpu = self._t = None
+
+    def __call__(self):
+        t = self._proc.cpu_times()
+        total = (t.user + t.system + getattr(t, "children_user", 0.0)
+                 + getattr(t, "children_system", 0.0))
+        now, cpu = time.monotonic(), None
+        if self._t is not None and now > self._t:
+            cpu = (total - self._cpu) / (now - self._t) * 100.0
+        self._cpu, self._t = total, now
+        return {"cpu": cpu, "rss": self._proc.memory_info().rss}
+
+
+class Owner:
+    """True for processes that belong to the current user."""
+
+    def __init__(self):
+        try:
+            self._me = psutil.Process().username()
+        except Exception:
+            self._me = None
+        self._cache = {}
+
+    def __call__(self, proc):
+        key = (proc.pid, proc.create)
+        if key not in self._cache:
+            if len(self._cache) > 512:
+                self._cache.clear()
+            try:
+                mine = self._me is not None and psutil.Process(proc.pid).username() == self._me
+            except (psutil.Error, OSError):
+                mine = False
+            self._cache[key] = mine
+        return self._cache[key]
 
 
 class Closer:
@@ -144,19 +202,35 @@ def active_tree(by_pid, root):
 
 class Engine:
     def __init__(self, paths, sampler=None, closer=None, foreground=foreground_pid,
-                 clock=time.time):
+                 clock=time.time, memory=read_memory, battery=on_battery,
+                 self_usage=None, owned=None, dry_run=False):
         self.paths = paths
+        self.dry_run = dry_run  # look only: close nothing, consume no requests
         self.sampler = sampler or Sampler()
         self.closer = closer or Closer()
         self.foreground = foreground
         self.clock = clock
+        self.memory = memory
+        self.battery = battery
+        self.self_usage = self_usage or SelfMeter()
+        self.owned = owned or Owner()
         self.cfg, self._cfg_mtime = dict(cfgmod.DEFAULTS), None
-        self._idle = {}       # (pid, create) -> consecutive idle samples
-        self._pending = {}    # pid -> close request awaiting exit
-        self._attempts = {}   # name -> (ticks with a close request, last time)
-        self._denied = set()  # (pid, create) we are not allowed to close
+        self._idle = {}        # (pid, create) -> consecutive idle samples
+        self._idle_since = {}  # (pid, create) -> when it became idle
+        self._pending = {}     # pid -> close request awaiting exit
+        self._attempts = {}    # name -> (ticks with a close request, last time)
+        self._denied = set()   # (pid, create) we are not allowed to close
         self._last_fg = None
+        self._focus_known = False
         self._self = {os.getpid(), os.getppid()}
+        self._urgent = False   # RAM is nearly full and closing is allowed
+        self._scan_percent = 0.0
+        self._last_scan = None
+        self._was_paused = False
+        self._on_battery = False
+        self._wake = threading.Event()
+        self.watching = False  # the panel is open: keep its details fresh
+        self.slowdown = 1      # raised when the guardian itself uses too much CPU
         self.saved_session = 0
         self.saved_total = 0
         self.closed_total = 0
@@ -173,11 +247,14 @@ class Engine:
         except (OSError, ValueError, TypeError, AttributeError):
             pass
 
-    def _reload_config(self):
+    def _config_mtime(self):
         try:
-            mtime = self.paths.config.stat().st_mtime
+            return self.paths.config.stat().st_mtime
         except OSError:
-            mtime = 0
+            return 0
+
+    def _reload_config(self):
+        mtime = self._config_mtime()
         if mtime != self._cfg_mtime:
             self._cfg_mtime = mtime
             self.cfg, warnings = cfgmod.load(self.paths.config)
@@ -207,8 +284,13 @@ class Engine:
             return "protected"
         if p.pid in active:
             return "in use"
-        if p.norm not in targets and not rules.is_junk(p.norm):
+        junk = rules.is_junk(p.norm)
+        if p.norm not in targets and not junk:
             return "not on close list"
+        # Without knowing which app is in use, a user's own app could be the one
+        # in front, so only built-in background junk is closed.
+        if not junk and not self._focus_known and not cfg["allow_without_focus"]:
+            return "focus unknown"
         if p.rss < cfg["min_process_mb"] * 2**20:
             return "too small"
         if now - p.create < MIN_AGE_SECONDS:
@@ -227,7 +309,56 @@ class Engine:
                 return "retry later"
         return ""
 
+    def _suggestions(self, procs, now, protect, targets):
+        """Big apps idle in the background for a long time that the user could allow."""
+        groups = {}
+        for p in procs:
+            if p.pid in self._self:
+                continue
+            g = groups.setdefault(p.norm, {"name": p.name, "bytes": 0, "since": 0.0, "procs": []})
+            g["bytes"] += p.rss
+            g["procs"].append(p)
+            start = self._idle_since.get((p.pid, p.create))
+            # One busy or in-use instance means the whole app is not idle.
+            g["since"] = None if start is None or g["since"] is None else max(g["since"], start)
+        out = []
+        for norm, g in groups.items():
+            if g["since"] is None or now - g["since"] < SUGGEST_IDLE_SECONDS:
+                continue
+            if g["bytes"] < SUGGEST_MIN_BYTES or norm in targets:
+                continue
+            if rules.is_protected(norm, protect) or rules.is_junk(norm):
+                continue
+            if not all(self.owned(p) for p in g["procs"]):
+                continue
+            out.append({"name": g["name"], "bytes": g["bytes"],
+                        "idle_minutes": int((now - g["since"]) // 60)})
+        out.sort(key=lambda s: -s["bytes"])
+        return out[:3]
+
+    def _take_clean_request(self):
+        try:
+            self.paths.clean.unlink()
+            return True
+        except OSError:
+            return False
+
+    def _govern(self, usage):
+        """Back off when the guardian itself is the one using the CPU."""
+        cpu, limit = usage.get("cpu"), self.cfg["self_cpu_limit_percent"]
+        if cpu is None:
+            return
+        before = self.slowdown
+        if cpu > limit:
+            self.slowdown = min(MAX_SLOWDOWN, self.slowdown * 2)
+        elif cpu < limit / 2.0:
+            self.slowdown = max(1, self.slowdown // 2)
+        if self.slowdown != before:
+            log.info("own CPU use %.1f%% (limit %.1f%%): checking %dx less often",
+                     cpu, limit, self.slowdown)
+
     def tick(self):
+        """Full scan: sample every process, close what is safe to close."""
         now = self.clock()
         self._reload_config()
         cfg = self.cfg
@@ -239,31 +370,40 @@ class Engine:
         if fg in self._self or fg not in by_pid:
             fg = self._last_fg if self._last_fg in by_pid else None
         self._last_fg = fg
+        self._focus_known = fg is not None
         active = active_tree(by_pid, fg)
         self._resolve_pending(now, by_pid)
 
-        idle = {}
+        idle, since = {}, {}
         for p in procs:
             key = (p.pid, p.create)
-            idle[key] = self._idle.get(key, 0) + 1 if (
-                p.cpu is not None and p.cpu < cfg["idle_cpu_percent"]) else 0
-        self._idle = idle
+            # Idle means quiet and in the background, so an app the user just
+            # switched away from is not closed the moment it loses focus.
+            if p.cpu is not None and p.cpu < cfg["idle_cpu_percent"] and p.pid not in active:
+                idle[key] = self._idle.get(key, 0) + 1
+                since[key] = self._idle_since.get(key, now)
+            else:
+                idle[key] = 0
+        self._idle, self._idle_since = idle, since
 
         installing = sorted({p.norm for p in procs} & rules.INSTALLERS)
         paused = self.paths.pause.exists()
+        clean = not self.dry_run and self._take_clean_request()
         if paused:
             note = "paused"
         elif cfg["mode"] == "observe":
             note = "observe only"
         elif installing:
             note = "waiting: %s is running" % installing[0]
-        elif mem["percent"] < cfg["act_above_percent"]:
-            note = "RAM is fine"
+        elif mem["percent"] < cfg["act_above_percent"] and not clean:
+            note = RAM_FINE
+        elif self.dry_run:
+            note = "scan only"
         else:
             note = ""
 
         protect, targets = set(cfg["protect_list"]), set(cfg["close_list"])
-        kept, would_close, this_tick = [], [], set()
+        kept, would_close, this_tick, requested = [], [], set(), 0
         self._denied &= {(p.pid, p.create) for p in procs}
         for p in procs:
             if p.pid in self._self or p.pid in self._pending:
@@ -280,6 +420,7 @@ class Engine:
                         self._attempts[p.norm] = (self._attempts.get(p.norm, (0, 0))[0] + 1, now)
                     self._pending[p.pid] = {"name": p.name, "bytes": freed, "create": p.create,
                                             "deadline": now + cfg["close_timeout_seconds"]}
+                    requested += 1
                     log.info("asked %s (pid %s) to close", p.name, p.pid)
                     continue
                 if why == "gone":
@@ -289,30 +430,85 @@ class Engine:
             is_target = p.norm in targets or rules.is_junk(p.norm)
             kept.append((is_target, p.rss, p.name, reason))
 
+        usage = self.self_usage()
+        self._govern(usage)
+        self._on_battery = bool(self.battery())
+        self._last_scan, self._was_paused, self._scan_percent = now, paused, mem["percent"]
+        self._urgent = not note and mem["percent"] >= HIGH_PERCENT
+
+        shown = note or "active"
+        if clean and not note:
+            shown = "cleaning" if requested else "nothing idle to clean"
         # Close-list entries first, then the biggest memory users.
         kept.sort(key=lambda k: (not k[0], -k[1]))
         self.snapshot = {
             "updated": now, "pid": os.getpid(), "mode": cfg["mode"], "paused": paused,
-            "note": note or "active", "mem": mem,
+            "note": shown, "mem": mem,
             "focus": by_pid[fg].name if fg in by_pid else None,
             "saved_session": self.saved_session, "saved_total": self.saved_total,
             "closed_total": self.closed_total, "closed": list(self.history),
             "closing": [r["name"] for r in self._pending.values()],
             "would_close": sorted(set(would_close)),
             "kept": [{"name": n, "bytes": r, "reason": why} for _, r, n, why in kept[:8]],
+            "suggest": self._suggestions(procs, now, protect, targets),
+            "self": dict(usage, slowdown=self.slowdown),
+            "battery": self._on_battery,
         }
         return self.snapshot
+
+    def _calm_interval(self):
+        return self.cfg["calm_interval_seconds"] * (2 if self._on_battery else 1)
+
+    def _level(self, percent):
+        """0 below the action threshold, 1 above it, 2 nearly full."""
+        if percent >= HIGH_PERCENT:
+            return 2
+        return 1 if percent >= self.cfg["act_above_percent"] else 0
+
+    def _can_skip_scan(self, now):
+        """True while a full scan is unlikely to find anything new to do."""
+        if self._pending or self._urgent or self.watching or self._last_scan is None:
+            return False
+        if now - self._last_scan >= self._calm_interval():
+            return False
+        if self.paths.clean.exists() or self.paths.pause.exists() != self._was_paused:
+            return False
+        return self._config_mtime() == self._cfg_mtime
+
+    def step(self):
+        """One cycle. Returns True after a full scan, False after a cheap memory check."""
+        now = self.clock()
+        if self._can_skip_scan(now):
+            mem = self.memory()
+            # Scan at once when memory crosses a threshold; 2 points absorbs jitter.
+            crossed = (abs(mem["percent"] - self._scan_percent) >= 2
+                       and self._level(mem["percent"]) != self._level(self._scan_percent))
+            if not crossed:
+                self.snapshot = dict(self.snapshot, mem=mem, updated=now)
+                return False
+        self.tick()
+        return True
+
+    def wake(self):
+        """Run the next cycle now instead of waiting for the interval."""
+        self._wake.set()
 
     def run(self, stop_event):
         log.info("guardian started (pid %s)", os.getpid())
         while not stop_event.is_set():
             try:
-                cfgmod.write_json(self.paths.state, self.tick())
+                if self.step():
+                    cfgmod.write_json(self.paths.state, self.snapshot)
             except Exception:
                 log.exception("tick failed")
-            deadline = time.monotonic() + self.cfg["interval_seconds"]
-            while time.monotonic() < deadline and not stop_event.is_set():
+            deadline = time.monotonic() + self.cfg["interval_seconds"] * self.slowdown
+            while not stop_event.is_set():
+                left = deadline - time.monotonic()
+                if left <= 0 or self._wake.wait(min(1.0, left)):
+                    break
                 if self.paths.stop.exists():
                     stop_event.set()
-                time.sleep(0.5)
+                elif self.paths.clean.exists():
+                    break
+            self._wake.clear()
         log.info("guardian stopped")
