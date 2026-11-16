@@ -9,6 +9,7 @@
 Set-StrictMode -Version 2.0
 
 function Get-PressureSignals {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'Plural noun is part of the existing exported API and describes the returned signals.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]$Sample,
@@ -107,6 +108,9 @@ function Get-PressureAssessment {
 }
 
 function New-PressureState {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Creates an in-memory state object and performs no external state change.')]
+    [CmdletBinding()]
+    param()
     return [pscustomobject]@{
         Level          = 'Normal'
         LastActionTime = $null

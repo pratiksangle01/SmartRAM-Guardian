@@ -91,6 +91,7 @@ function Write-SRGLog {
     }
     catch {
         # Never let logging crash the guardian loop.
+        [void]$_
     }
 }
 

@@ -99,14 +99,16 @@ namespace SRG.Native {
 }
 
 function Set-SRGProcessMemoryPriority {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory = $true)][int]$ProcessId,
         [ValidateSet(1, 2, 3, 4, 5)][int]$Priority = 2
     )
-    $err = $null
-    $ok = [SRG.Native.Priority]::SetMemoryPriority($ProcessId, [uint32]$Priority, [ref]$err)
-    return [pscustomobject]@{ Success = $ok; Error = $err; Priority = $Priority }
+    if ($PSCmdlet.ShouldProcess("process $ProcessId", "set memory priority to $Priority")) {
+        $err = $null
+        $ok = [SRG.Native.Priority]::SetMemoryPriority($ProcessId, [uint32]$Priority, [ref]$err)
+        return [pscustomobject]@{ Success = $ok; Error = $err; Priority = $Priority }
+    }
 }
 
 function Get-SRGProcessMemoryPriority {
@@ -117,14 +119,16 @@ function Get-SRGProcessMemoryPriority {
 }
 
 function Set-SRGProcessEcoQoSMode {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory = $true)][int]$ProcessId,
         [bool]$Enabled = $true
     )
-    $err = $null
-    $ok = [SRG.Native.Priority]::SetEcoQos($ProcessId, $Enabled, [ref]$err)
-    return [pscustomobject]@{ Success = $ok; Error = $err }
+    if ($PSCmdlet.ShouldProcess("process $ProcessId", "set EcoQoS mode to $Enabled")) {
+        $err = $null
+        $ok = [SRG.Native.Priority]::SetEcoQos($ProcessId, $Enabled, [ref]$err)
+        return [pscustomobject]@{ Success = $ok; Error = $err }
+    }
 }
 
 function Test-HasWindowedAncestor {
@@ -151,6 +155,8 @@ function Test-HasWindowedAncestor {
 }
 
 function Get-PriorityLoweringTargets {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'Plural noun is part of the existing exported API and describes the returned collection.')]
+    [CmdletBinding()]
     <#
     .SYNOPSIS
         Pure selection: which processes may have their memory priority lowered.

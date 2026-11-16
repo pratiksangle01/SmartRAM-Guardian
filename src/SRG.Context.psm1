@@ -8,6 +8,7 @@
 Set-StrictMode -Version 2.0
 
 function Get-WorkContext {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Retained for compatibility; work-context detection uses the process snapshot and foreground PID.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]$Processes,

@@ -2,6 +2,8 @@
 . "$PSScriptRoot\TestHelpers.ps1"
 
 function New-FakeStateFile {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Creates temporary state fixtures for tests; ShouldProcess would add no useful user interaction.')]
+    [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Path,
         [int]$AgeSeconds = 0
@@ -46,6 +48,8 @@ Describe 'status.ps1' {
     $statusScript = Join-Path $script:RepoRoot 'status.ps1'
 
     function New-StatusRoot {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Creates temporary test directories only; ShouldProcess would add no useful user interaction.')]
+        [CmdletBinding()]
         param([string]$Name)
         $root = Join-Path $TestDrive $Name
         New-Item -ItemType Directory -Path $root -Force | Out-Null

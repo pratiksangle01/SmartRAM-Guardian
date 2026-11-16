@@ -151,6 +151,8 @@ function Test-CommandLineMatch {
 }
 
 function Get-ActiveSensitiveOperations {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'Plural noun is part of the existing exported API and describes the returned operations.')]
+    [CmdletBinding()]
     <#
     .SYNOPSIS
         Detects installers, builds and large copies that must freeze ALL actions.
