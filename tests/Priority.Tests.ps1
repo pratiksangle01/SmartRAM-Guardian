@@ -77,6 +77,8 @@ Describe 'Memory-priority lever' {
                 -ArgumentList '/c', 'ping -n 10 127.0.0.1 >nul' -PassThru -WindowStyle Hidden
             try {
                 Start-Sleep -Milliseconds 400
+                # Establish the baseline instead of assuming the runner's process priority.
+                (Set-SRGProcessMemoryPriority -ProcessId $child.Id -Priority 5).Success | Should Be $true
                 (Get-SRGProcessMemoryPriority -ProcessId $child.Id).Priority | Should Be 5
                 (Set-SRGProcessMemoryPriority -ProcessId $child.Id -Priority 2).Success | Should Be $true
                 (Get-SRGProcessMemoryPriority -ProcessId $child.Id).Priority | Should Be 2

@@ -45,6 +45,9 @@ jobs:
             $r.TotalCount, $r.PassedCount, $r.FailedCount, $r.SkippedCount)
           if ($r.FailedCount -gt 0) {
             $r.TestResult | Where-Object { -not $_.Passed } |
-              ForEach-Object { Write-Host "FAIL: $($_.Describe) / $($_.Name): $($_.FailureMessage)" }
+              ForEach-Object {
+                Write-Host "FAIL: $($_.Describe) / $($_.Name): $($_.FailureMessage)"
+                Write-Host $_.StackTrace
+              }
             exit 1
           }
