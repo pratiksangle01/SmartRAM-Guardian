@@ -90,7 +90,8 @@ Do not approve apps or enable automated actions just to test setup.
 Before installing, check for an existing task:
 
 ```powershell
-Get-ScheduledTask -TaskName SmartRAM-Guardian -ErrorAction SilentlyContinue
+Get-ScheduledTask -TaskName SmartRAM-Guardian -ErrorAction SilentlyContinue |
+    Select-Object -ExpandProperty Actions | Format-List Execute, Arguments, WorkingDirectory
 ```
 
 Install replaces a task with that name, and uninstall removes it; do not use
