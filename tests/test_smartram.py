@@ -8,10 +8,10 @@ import time
 import psutil
 import pytest
 
-from smartram import autostart, config, foreground, pathlink, rules
+from smartram import autostart, config, engine, foreground, pathlink, rules
 from smartram.__main__ import main
-from smartram.engine import (Engine, active_tree, children_map, main_process, make_proc,
-                             own_pids, parent_of)
+from smartram.engine import (OTHER_OPEN, Engine, active_tree, children_map, main_process,
+                             make_proc, own_pids, parent_of)
 from smartram.widget import SIZE, Widget, fmt_bytes, mood, panel_text
 
 MB = 2**20
@@ -24,7 +24,9 @@ class FakeCloser:
     def request(self, proc, family=()):
         self.asked.append(proc.name)
         self.families.append(sorted(m.pid for m in family))
-        return self.result
+        ok, why = self.result
+        held = [(m.pid, m.create, 50 * MB) for m in [proc] + list(family)] if ok else []
+        return ok, why, held
 
 
 class World:
@@ -48,8 +50,7 @@ class World:
                              foreground=lambda: self.fg, clock=lambda: self.now,
                              memory=self.memory, battery=lambda: self.on_battery,
                              self_usage=lambda: {"cpu": self.own_cpu, "rss": 30 * MB},
-                             owned=lambda proc: True, app_like=lambda proc: True,
-                             measure=lambda proc: 50 * MB)
+                             owned=lambda proc: True, app_like=lambda proc: True)
 
     def memory(self):
         return {"total": 8 * 2**30, "available": 2 * 2**30, "percent": self.percent}
@@ -244,6 +245,46 @@ def test_something_the_app_started_that_lives_on_is_not_counted_or_closed(world)
     snap = world.tick()
     assert snap["closed"][0]["bytes"] == 2 * 50 * MB            # the game still holds its memory
     assert world.reason(snap, "game.exe") == "not on close list"
+
+
+def test_launcher_is_asked_again_once_what_it_started_is_closed(tmp_path):
+    world = World(tmp_path, closer=FakeCloser((False, OTHER_OPEN)))
+    snap = world.tick(6)
+    assert world.reason(snap, "GoogleUpdate.exe") == OTHER_OPEN and snap["closing"] == []
+    asked = len(world.closer.asked)
+    assert asked > 1                                            # asked again on every scan
+    world.closer.result = (True, "")
+    assert world.tick()["closing"] == ["GoogleUpdate.exe"]
+    assert len(world.closer.asked) == asked + 1
+
+
+def test_a_process_is_never_ended_while_its_tree_shows_a_window(monkeypatch):
+    """The Windows rule, tried on every system with a real process and made-up windows."""
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+    try:
+        born = psutil.Process(child.pid).create_time()
+        launcher = make_proc(child.pid, "steam.exe", rss=5, create=born)
+        game, asked, shown = make_proc(4000000, "game.exe", rss=7), [], set()
+        monkeypatch.setattr(engine, "WINDOWS", True)
+        monkeypatch.setattr(engine, "visible_windows", lambda pids: sorted(shown & set(pids)))
+        monkeypatch.setattr(engine, "close_windows", asked.extend)
+        closer = engine.Closer()
+
+        shown.add(game.pid)                                     # only what it started has a window
+        assert closer.request(launcher, [game]) == (False, OTHER_OPEN, [])
+        shown.add(child.pid)                                    # its own window: asked, not ended
+        ok, why, held = closer.request(launcher, [game])
+        assert (ok, why, asked) == (True, "", [child.pid])      # the game's window is not touched
+        assert [m[0] for m in held] == [child.pid, game.pid] and held[0][2] > 0 and held[1][2] == 7
+        time.sleep(0.5)
+        assert child.poll() is None
+
+        shown.clear()                                           # no window anywhere: ended directly
+        assert closer.request(launcher, [game])[0] and asked == [child.pid]
+        child.wait(15)
+    finally:
+        if child.poll() is None:
+            child.kill()
 
 
 def test_app_with_a_tiny_main_process_is_sized_as_a_whole(world):
@@ -627,7 +668,8 @@ def test_shell_profile_choice_never_hides_another_profile(tmp_path, monkeypatch)
     assert pick("/bin/bash", "darwin").name == ".bash_profile"
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="only Windows keeps open files from being deleted")
+@pytest.mark.skipif(sys.platform != "win32",
+                    reason="only Windows keeps open files from being deleted")
 def test_uninstall_finishes_by_itself_when_windows_has_files_locked(tmp_path, monkeypatch, capsys):
     home = tmp_path / "smartram home"                          # a space, as in many user names
     (home / "venv").mkdir(parents=True)

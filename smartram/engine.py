@@ -28,10 +28,12 @@ MAX_SLOWDOWN = 8
 RECOVER_SCANS = 5  # light scans in a row before the guardian speeds up again
 HIGH_PERCENT = 90  # RAM this full is watched at the fast interval
 RAM_FINE = "RAM is fine"
+OTHER_OPEN = "has another app open"
+WINDOWS = sys.platform == "win32"
 
 # When instances of one app are kept for different reasons, the panel shows the first of these.
-_RANK = ("in use", "protected", "busy", "just started", "focus unknown", "no permission",
-         "keeps coming back", "retry later", "too small")
+_RANK = ("in use", "protected", "busy", "just started", "focus unknown", OTHER_OPEN,
+         "no permission", "keeps coming back", "retry later", "too small")
 
 
 def _rank(reason):
@@ -170,37 +172,48 @@ class Closer:
     def request(self, proc, family=()):
         """Ask proc to exit; family is the rest of its process tree.
 
-        Returns (requested, reason if not requested).
+        Returns (requested, reason if not requested, members): members is
+        (pid, create, bytes held) for the whole tree, measured just before asking.
         """
         try:
             p = psutil.Process(proc.pid)
             if abs(p.create_time() - proc.create) > 1:
-                return False, "gone"
+                return False, "gone", []
             if self._me is None or p.username() != self._me:
-                return False, "no permission"
-            if sys.platform == "win32" and post_wm_close(own_pids(proc, family)):
-                return True, ""
-            # SIGTERM on POSIX; on Windows only reached when the app shows no window.
-            p.terminate()
-            return True, ""
+                return False, "no permission", []
+            windows = []
+            if WINDOWS:
+                own = own_pids(proc, family)
+                windows = visible_windows(own)
+                # Ending a launcher can take a program it started down with it, so one
+                # with no window of its own stays while such a program shows a window.
+                if not windows and visible_windows([m.pid for m in family if m.pid not in own]):
+                    return False, OTHER_OPEN, []
+            members = [(m.pid, m.create, unique_bytes(m)) for m in [proc] + list(family)]
+            if windows:
+                close_windows(windows)
+            else:
+                # SIGTERM on POSIX; on Windows only reached when no window is showing.
+                p.terminate()
+            return True, "", members
         except psutil.NoSuchProcess:
-            return False, "gone"
+            return False, "gone", []
         except (psutil.AccessDenied, OSError):
-            return False, "no permission"
+            return False, "no permission", []
 
 
-def post_wm_close(pids):
-    """Windows: send WM_CLOSE to the visible windows of these PIDs. Returns how many."""
+def visible_windows(pids):
+    """Windows: the visible top-level windows that belong to these PIDs."""
     import ctypes
     from ctypes import wintypes
     pids = set(pids)
+    if not pids:
+        return []
     user32 = ctypes.windll.user32
     enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     user32.EnumWindows.argtypes = [enum_proc, wintypes.LPARAM]
     user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
     user32.IsWindowVisible.argtypes = [wintypes.HWND]
-    user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
-                                    wintypes.LPARAM]
     found = []
 
     def cb(hwnd, _):
@@ -211,9 +224,18 @@ def post_wm_close(pids):
         return True
 
     user32.EnumWindows(enum_proc(cb), 0)
-    for hwnd in found:
+    return found
+
+
+def close_windows(windows):
+    """Windows: send WM_CLOSE to these windows, as a click on their close button would."""
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
+                                    wintypes.LPARAM]
+    for hwnd in windows:
         user32.PostMessageW(hwnd, 0x0010, 0, 0)
-    return len(found)
 
 
 def parent_of(by_pid, proc):
@@ -275,12 +297,11 @@ def active_tree(by_pid, root, children=None):
 class Engine:
     def __init__(self, paths, sampler=None, closer=None, foreground=foreground_pid,
                  clock=time.time, memory=read_memory, battery=on_battery,
-                 self_usage=None, owned=None, app_like=None, measure=None, dry_run=False):
+                 self_usage=None, owned=None, app_like=None, dry_run=False):
         self.paths = paths
         self.dry_run = dry_run  # look only: close nothing, consume no requests
         self.sampler = sampler or Sampler()
         self.closer = closer or Closer()
-        self.measure = measure or unique_bytes
         self.foreground = foreground
         self.clock = clock
         self.memory = memory
@@ -528,9 +549,7 @@ class Engine:
                 would_close.append(p.name)
                 reason = note
             elif not reason:
-                # Measured before asking: afterwards the processes are gone.
-                members = [(m.pid, m.create, self.measure(m)) for m in [p] + family]
-                ok, why = self.closer.request(p, family)
+                ok, why, members = self.closer.request(p, family)
                 if ok:
                     if p.norm not in this_tick:
                         this_tick.add(p.norm)
@@ -543,7 +562,8 @@ class Engine:
                     continue
                 if why == "gone":
                     continue
-                self._denied.add((p.pid, p.create))
+                if why == "no permission":
+                    self._denied.add((p.pid, p.create))
                 reason = why
             outcome[p.pid] = reason
 

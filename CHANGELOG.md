@@ -3,7 +3,7 @@
 ## 1.2.0
 
 - Fixed: on Ubuntu nothing was ever closed, because a service that is always running there counted as an installer in progress. The same happened on Windows while Windows servicing was active.
-- Fixed: an allowed app with several processes could have its idle helpers closed while the app itself was busy. An app is now judged as a whole and closed through its main process; the memory of its helpers is counted too. Something else that app started (a game from a launcher) is left alone and is not counted as saved.
+- Fixed: an allowed app with several processes could have its idle helpers closed while the app itself was busy. An app is now judged as a whole and closed through its main process; the memory of its helpers is counted too. A different program that app started (a game from a launcher) is never asked to close and is not counted as saved; on Windows a launcher with no window of its own stays while such a program has a window open.
 - Fixed: the `smartram` command now works in a new terminal after installing on Windows and macOS. Uninstall undoes this.
 - Fixed: on macOS only the status dot was visible while the panel was closed; the dolphin is back. On Windows it no longer has a dark fringe on light backgrounds.
 - Fixed: on Windows a click on the taskbar or the desktop made every app count as "in use" for that moment, which kept resetting how long apps had been idle.

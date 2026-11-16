@@ -102,14 +102,17 @@ An app is closed only when **all** of these are true:
 
 An app is judged as a whole. If any of its helper processes is busy, the app stays;
 when it goes, it is closed through its main process and the helpers go with it.
+A different program it started (a game from a launcher, a document opened from a
+download) is never asked to close.
 
 Apps are asked to close the polite way: a window-close message on Windows, a
 terminate signal on macOS and Linux. On Windows an app that shows no window is
-ended directly. An app that keeps coming back is left alone after three tries.
+ended directly, unless a program it started has a window open; then it stays.
+An app that keeps coming back is left alone after three tries.
 
 The panel shows the reason for everything that stays: `in use`, `protected`,
 `busy`, `not on close list`, `too small`, `just started`, `focus unknown`,
-`keeps coming back` or `no permission`.
+`has another app open`, `keeps coming back` or `no permission`.
 
 ## Light on your machine
 

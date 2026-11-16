@@ -13,6 +13,8 @@ import sys
 import tempfile
 import time
 
+import psutil
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
@@ -56,7 +58,7 @@ def start_victims(work):
     return idle, busy
 
 
-def check_windows_calls():
+def check_windows_calls(work):
     """Run the Windows-only window code against real windows."""
     user32 = foreground._user32()[0]
     desktop = user32.GetDesktopWindow()
@@ -67,22 +69,50 @@ def check_windows_calls():
 
     notepad = shutil.which("notepad")
     if not notepad:
-        print("SKIP: no notepad on this machine, window-close message not tried")
+        print("SKIP: no notepad on this machine, closing a window not tried")
         return
-    app = subprocess.Popen([notepad])
+    # A launcher with no window of its own that started a program which has one.
+    shell = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "cmd.exe")
+    launcher_exe = shutil.copy(shell, os.path.join(work, "srg-launcher.exe"))
+    launcher = subprocess.Popen([launcher_exe, "/c", "start", "/wait", "", notepad],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, creationflags=0x08000000)
     time.sleep(5)
-    asked = engine.post_wm_close([app.pid])
-    print("windows asked to close: %d" % asked)
-    if asked:
-        try:
-            app.wait(15)
-        except subprocess.TimeoutExpired:
-            pass
-        check(app.poll() is not None, "an app with a window exits when asked politely")
-    else:
-        print("SKIP: notepad showed no window owned by its own process here")
-    if app.poll() is None:
-        app.kill()
+
+    def proc(p):
+        return engine.make_proc(p.pid, p.name(), ppid=p.ppid(), create=p.create_time())
+
+    started = []
+    try:
+        started = psutil.Process(launcher.pid).children(recursive=True)
+        print("the launcher started: %s" % [p.name() for p in started])
+        apps = [p for p in started if engine.visible_windows([p.pid])]
+        if not apps:
+            print("SKIP: notepad showed no window owned by a process the launcher started")
+            return
+        closer = engine.Closer()
+        answer = closer.request(proc(psutil.Process(launcher.pid)), [proc(p) for p in started])
+        time.sleep(2)
+        check(answer == (False, engine.OTHER_OPEN, []) and launcher.poll() is None
+              and all(p.is_running() for p in apps),
+              "a launcher with no window stays while a program it started shows one: %r"
+              % (answer,))
+        for p in apps:
+            ok, why, held = closer.request(proc(p))
+            print("asked %s to close: %s %r, holding %.1f MB"
+                  % (p.name(), ok, why, sum(m[2] for m in held) / 2**20))
+        check(not psutil.wait_procs(apps, timeout=15)[1],
+              "an app with a window exits when asked politely")
+    except psutil.Error as exc:
+        check(False, "the window checks could not run: %r" % exc)
+    finally:
+        for p in started:
+            try:
+                p.kill()
+            except psutil.Error:
+                pass
+        if launcher.poll() is None:
+            launcher.kill()
 
 
 def main():
@@ -108,7 +138,7 @@ def main():
     guard = subprocess.Popen(smartram + ["run", "--no-widget"], env=env, cwd=REPO)
     try:
         if WINDOWS:
-            check_windows_calls()
+            check_windows_calls(work)
         deadline = time.time() + 150
         while time.time() < deadline and idle.poll() is None:
             time.sleep(1)
