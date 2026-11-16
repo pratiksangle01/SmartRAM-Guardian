@@ -141,12 +141,21 @@ class Inspector:
         return rules.looks_like_app(self._get(proc, "exe", lambda p: p.exe()))
 
 
-def _unique_bytes(proc):
+def unique_bytes(proc):
     """Memory that only this process holds; its resident size when that is not readable."""
     try:
         return psutil.Process(proc.pid).memory_full_info().uss
     except Exception:
         return proc.rss
+
+
+def own_pids(proc, family):
+    """The app's own processes: its main process and the helpers named after it.
+
+    Something else it started (a game from a launcher, a meeting app opened from a
+    browser link) is not part of it.
+    """
+    return [proc.pid] + [m.pid for m in family if m.norm.startswith(proc.norm)]
 
 
 class Closer:
@@ -159,26 +168,25 @@ class Closer:
             self._me = None
 
     def request(self, proc, family=()):
-        """Ask proc to exit; family is the rest of its process tree, which goes with it.
+        """Ask proc to exit; family is the rest of its process tree.
 
-        Returns (requested, bytes that will be freed, reason if not requested).
+        Returns (requested, reason if not requested).
         """
         try:
             p = psutil.Process(proc.pid)
             if abs(p.create_time() - proc.create) > 1:
-                return False, 0, "gone"
+                return False, "gone"
             if self._me is None or p.username() != self._me:
-                return False, 0, "no permission"
-            freed = sum(_unique_bytes(m) for m in [proc] + list(family))
-            if sys.platform == "win32" and post_wm_close([proc.pid] + [m.pid for m in family]):
-                return True, freed, ""
+                return False, "no permission"
+            if sys.platform == "win32" and post_wm_close(own_pids(proc, family)):
+                return True, ""
             # SIGTERM on POSIX; on Windows only reached when the app shows no window.
             p.terminate()
-            return True, freed, ""
+            return True, ""
         except psutil.NoSuchProcess:
-            return False, 0, "gone"
+            return False, "gone"
         except (psutil.AccessDenied, OSError):
-            return False, 0, "no permission"
+            return False, "no permission"
 
 
 def post_wm_close(pids):
@@ -267,11 +275,12 @@ def active_tree(by_pid, root, children=None):
 class Engine:
     def __init__(self, paths, sampler=None, closer=None, foreground=foreground_pid,
                  clock=time.time, memory=read_memory, battery=on_battery,
-                 self_usage=None, owned=None, app_like=None, dry_run=False):
+                 self_usage=None, owned=None, app_like=None, measure=None, dry_run=False):
         self.paths = paths
         self.dry_run = dry_run  # look only: close nothing, consume no requests
         self.sampler = sampler or Sampler()
         self.closer = closer or Closer()
+        self.measure = measure or unique_bytes
         self.foreground = foreground
         self.clock = clock
         self.memory = memory
@@ -329,17 +338,21 @@ class Engine:
                 log.warning("config: %s", w)
 
     def _resolve_pending(self, now, by_pid):
-        for pid, req in list(self._pending.items()):
+        def gone(pid, create):
             cur = by_pid.get(pid)
-            if cur is None or abs(cur.create - req["create"]) > 1:
+            return cur is None or abs(cur.create - create) > 1
+
+        for pid, req in list(self._pending.items()):
+            if gone(pid, req["create"]):
                 del self._pending[pid]
-                self.saved_session += req["bytes"]
-                self.saved_total += req["bytes"]
+                # Count only what really exited: something the app started may live on.
+                freed = sum(size for mpid, create, size in req["members"] if gone(mpid, create))
+                self.saved_session += freed
+                self.saved_total += freed
                 self.closed_total += 1
-                self.history.insert(0, {"name": req["name"], "bytes": req["bytes"], "time": now})
+                self.history.insert(0, {"name": req["name"], "bytes": freed, "time": now})
                 del self.history[HISTORY:]
-                log.info("closed %s (pid %s), freed %.0f MB", req["name"], pid,
-                         req["bytes"] / 2**20)
+                log.info("closed %s (pid %s), freed %.0f MB", req["name"], pid, freed / 2**20)
             elif now >= req["deadline"]:
                 del self._pending[pid]
                 log.info("%s (pid %s) did not exit; left running", req["name"], pid)
@@ -347,16 +360,12 @@ class Engine:
     def _is_junk(self, norm):
         return self.cfg["close_builtin_junk"] and rules.is_junk(norm)
 
-    def _closing_pids(self, children):
+    def _closing_pids(self):
         """PIDs of the apps that were asked to close, helpers included."""
-        out = set(self._pending)
-        for pid in self._pending:
-            out.update(m.pid for m in descendants(children, pid))
-        return out
+        return {pid for req in self._pending.values() for pid, _, _ in req["members"]}
 
-    def _reason_kept(self, p, active, now, protect, targets, this_tick=()):
-        """Why the app whose main process is p stays; '' means p itself may be closed."""
-        cfg = self.cfg
+    def _not_wanted(self, p, active, protect, targets):
+        """Why the app whose main process is p is not up for closing at all; '' if it is."""
         if rules.is_protected(p.norm, protect):
             return "protected"
         if p.pid in active:
@@ -366,13 +375,19 @@ class Engine:
             return "not on close list"
         # Without knowing which app is in use, a user's own app could be the one
         # in front, so only built-in background junk is closed.
-        if not junk and not self._focus_known and not cfg["allow_without_focus"]:
+        if not junk and not self._focus_known and not self.cfg["allow_without_focus"]:
             return "focus unknown"
-        if p.rss < cfg["min_process_mb"] * 2**20:
+        return ""
+
+    def _not_ready(self, p, family, now, this_tick=()):
+        """Why a wanted app (main process p plus its family) cannot be closed yet; '' if it can."""
+        cfg = self.cfg
+        if p.rss + sum(m.rss for m in family) < cfg["min_process_mb"] * 2**20:
             return "too small"
         if now - p.create < MIN_AGE_SECONDS:
             return "just started"
-        if self._idle.get((p.pid, p.create), 0) < cfg["idle_samples"]:
+        # One busy helper keeps the whole app.
+        if any(self._idle.get((m.pid, m.create), 0) < cfg["idle_samples"] for m in [p] + family):
             return "busy"
         if (p.pid, p.create) in self._denied:
             return "no permission"
@@ -499,28 +514,29 @@ class Engine:
         # An app is decided as a whole, through its main process: helpers are never
         # closed on their own, and one busy helper keeps the whole app.
         main = {p.pid: main_process(by_pid, p) for p in procs}
-        going = self._closing_pids(children)
+        going = self._closing_pids()
         outcome, would_close, this_tick, requested = {}, [], set(), 0
         for p in procs:
             if main[p.pid] is not p or p.pid in self._self or p.pid in going:
                 continue
-            reason = self._reason_kept(p, active, now, protect, targets, this_tick)
-            family = ()
+            reason = self._not_wanted(p, active, protect, targets)
+            family = []
             if not reason:
                 family = [m for m in descendants(children, p.pid) if m.pid not in self._self]
-                if any(self._idle.get((m.pid, m.create), 0) < cfg["idle_samples"]
-                       for m in family):
-                    reason = "busy"
+                reason = self._not_ready(p, family, now, this_tick)
             if not reason and note:
                 would_close.append(p.name)
                 reason = note
             elif not reason:
-                ok, freed, why = self.closer.request(p, family)
+                # Measured before asking: afterwards the processes are gone.
+                members = [(m.pid, m.create, self.measure(m)) for m in [p] + family]
+                ok, why = self.closer.request(p, family)
                 if ok:
                     if p.norm not in this_tick:
                         this_tick.add(p.norm)
                         self._attempts[p.norm] = (self._attempts.get(p.norm, (0, 0))[0] + 1, now)
-                    self._pending[p.pid] = {"name": p.name, "bytes": freed, "create": p.create,
+                    self._pending[p.pid] = {"name": p.name, "create": p.create,
+                                            "members": members,
                                             "deadline": now + cfg["close_timeout_seconds"]}
                     requested += 1
                     log.info("asked %s (pid %s) to close", p.name, p.pid)
@@ -532,7 +548,7 @@ class Engine:
             outcome[p.pid] = reason
 
         # One row per app name: its processes added up, with the most telling reason.
-        kept, going = {}, self._closing_pids(children)
+        kept, going = {}, self._closing_pids()
         for p in procs:
             reason = outcome.get(main[p.pid].pid)
             if reason is None or p.pid in self._self or p.pid in going:

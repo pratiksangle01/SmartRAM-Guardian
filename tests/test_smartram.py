@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 
 import psutil
 import pytest
@@ -10,14 +11,14 @@ import pytest
 from smartram import autostart, config, foreground, pathlink, rules
 from smartram.__main__ import main
 from smartram.engine import (Engine, active_tree, children_map, main_process, make_proc,
-                             parent_of)
+                             own_pids, parent_of)
 from smartram.widget import SIZE, Widget, fmt_bytes, mood, panel_text
 
 MB = 2**20
 
 
 class FakeCloser:
-    def __init__(self, result=(True, 50 * MB, "")):
+    def __init__(self, result=(True, "")):
         self.result, self.asked, self.families = result, [], []
 
     def request(self, proc, family=()):
@@ -47,7 +48,8 @@ class World:
                              foreground=lambda: self.fg, clock=lambda: self.now,
                              memory=self.memory, battery=lambda: self.on_battery,
                              self_usage=lambda: {"cpu": self.own_cpu, "rss": 30 * MB},
-                             owned=lambda proc: True, app_like=lambda proc: True)
+                             owned=lambda proc: True, app_like=lambda proc: True,
+                             measure=lambda proc: 50 * MB)
 
     def memory(self):
         return {"total": 8 * 2**30, "available": 2 * 2**30, "percent": self.percent}
@@ -205,7 +207,7 @@ def test_same_named_instances_close_together(world):
 
 
 def test_no_permission_is_reported_and_not_retried(tmp_path):
-    world = World(tmp_path, closer=FakeCloser((False, 0, "no permission")))
+    world = World(tmp_path, closer=FakeCloser((False, "no permission")))
     snap = world.tick(6)
     assert world.closer.asked == ["GoogleUpdate.exe"]
     assert world.reason(snap, "GoogleUpdate.exe") == "no permission"
@@ -225,7 +227,34 @@ def test_app_closes_through_its_main_process_and_takes_helpers_along(world):
     assert snap["closing"] == ["Discord"] and world.reason(snap, "Discord") is None
     assert world.reason(snap, "discord_gpu_helper") is None     # goes with its app
     world.procs = [p for p in world.procs if p.pid < 400]
-    assert world.tick()["closed"][0]["name"] == "Discord"
+    closed = world.tick()["closed"][0]
+    assert closed["name"] == "Discord" and closed["bytes"] == 4 * 50 * MB   # helpers counted
+
+
+def test_something_the_app_started_that_lives_on_is_not_counted_or_closed(world):
+    config.save(world.paths.config, dict(config.DEFAULTS, close_list=["steam"]))
+    world.remove(200)
+    steam, helper = app(400, "steam.exe"), app(401, "steamwebhelper.exe", ppid=400)
+    game = app(402, "game.exe", ppid=400)
+    world.procs += [steam, helper, game]
+    world.tick(4)
+    assert world.closer.asked == ["steam.exe"]
+    assert own_pids(steam, [helper, game]) == [400, 401]        # the game keeps its windows
+    world.procs = [p for p in world.procs if p.pid not in (400, 401)]
+    snap = world.tick()
+    assert snap["closed"][0]["bytes"] == 2 * 50 * MB            # the game still holds its memory
+    assert world.reason(snap, "game.exe") == "not on close list"
+
+
+def test_app_with_a_tiny_main_process_is_sized_as_a_whole(world):
+    config.save(world.paths.config, dict(config.DEFAULTS, close_list=["launcher"]))
+    world.remove(200)
+    world.procs += [app(400, "launcher", rss=2 * MB), app(401, "launcher", rss=300 * MB, ppid=400)]
+    world.tick(4)
+    assert world.closer.asked == ["launcher"]
+    world.procs = [p for p in world.procs if p.pid < 400] + [app(500, "launcher", rss=2 * MB)]
+    world.engine._attempts.clear()
+    assert world.reason(world.tick(4), "launcher") == "too small"
 
 
 def test_one_busy_helper_keeps_the_whole_app(world):
@@ -596,6 +625,25 @@ def test_shell_profile_choice_never_hides_another_profile(tmp_path, monkeypatch)
     assert pick("/bin/bash", "darwin").name == ".profile"      # no new ~/.bash_profile
     (tmp_path / ".bash_profile").write_text("")
     assert pick("/bin/bash", "darwin").name == ".bash_profile"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="only Windows keeps open files from being deleted")
+def test_uninstall_finishes_by_itself_when_windows_has_files_locked(tmp_path, monkeypatch, capsys):
+    home = tmp_path / "smartram home"                          # a space, as in many user names
+    (home / "venv").mkdir(parents=True)
+    locked = home / "venv" / "python.exe"
+    locked.write_text("x")
+    (home / "config.json").write_text("{}")
+    monkeypatch.setenv("SMARTRAM_HOME", str(home))
+    monkeypatch.setattr(autostart, "disable", lambda: None)
+    monkeypatch.setattr(pathlink, "unlink", lambda home: None)
+    with open(str(locked), "rb"):                              # stands in for the running program
+        assert main(["uninstall"]) == 0
+        assert "few seconds" in capsys.readouterr().out and locked.exists()
+    deadline = time.time() + 30
+    while home.exists() and time.time() < deadline:
+        time.sleep(0.5)
+    assert not home.exists()
 
 
 def test_uninstall_deletes_only_its_own_files(tmp_path, monkeypatch, capsys):
