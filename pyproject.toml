@@ -4,11 +4,30 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smartram-guardian"
-description = "Cross-platform background RAM guardian with a desktop pet"
+description = "A tiny desktop dolphin that frees RAM: it closes idle background junk on Windows, macOS and Linux"
 readme = "README.md"
 requires-python = ">=3.8"
 dependencies = ["psutil>=5.9"]
 dynamic = ["version"]
+keywords = [
+    "ram", "memory", "ram-cleaner", "memory-optimizer", "free-ram", "process-manager",
+    "desktop-pet", "system-monitor", "windows", "macos", "linux",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Monitoring",
+    "Topic :: Utilities",
+]
+
+[project.urls]
+Homepage = "https://github.com/pratiksangle01/SmartRAM-Guardian"
+Issues = "https://github.com/pratiksangle01/SmartRAM-Guardian/issues"
+Changelog = "https://github.com/pratiksangle01/SmartRAM-Guardian/blob/main/CHANGELOG.md"
 
 [project.scripts]
 smartram = "smartram.__main__:main"

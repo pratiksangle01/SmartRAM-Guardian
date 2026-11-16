@@ -1,0 +1,30 @@
+name: Bug report
+description: Something does not work, or the guardian closed or kept the wrong thing
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `smartram doctor`
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: Output of `smartram status`
+      description: Remove any process names you do not want to share.
+      render: text
+  - type: textarea
+    id: log
+    attributes:
+      label: Last lines of the log
+      description: The file `guardian.log` in the data folder shown by `smartram doctor`.
+      render: text
