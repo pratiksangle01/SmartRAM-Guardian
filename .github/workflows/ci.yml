@@ -12,7 +12,7 @@ jobs:
   test:
     name: ${{ matrix.os }} / py${{ matrix.python }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -21,52 +21,74 @@ jobs:
         include:
           - os: ubuntu-22.04
             python: '3.8'
+    env:
+      # Linux runners have no screen; the pet gets a virtual one.
+      SCREEN: ${{ startsWith(matrix.os, 'ubuntu') && 'xvfb-run -a' || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
 
-      - name: Unit tests
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install . pytest
-          python -m pytest -q
-
-      - name: Desktop pet opens (Linux)
+      - name: Virtual screen (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq xvfb python3-tk
-          xvfb-run -a python -m smartram widget-test
+          sudo apt-get install -y -qq xvfb
 
-      - name: Desktop pet opens (Windows, macOS)
-        if: runner.os != 'Linux'
-        run: python -m smartram widget-test
+      - name: Unit tests, including the pet's buttons
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . pytest
+          $SCREEN python -m pytest -q -rs
+
+      - name: Desktop pet opens
+        shell: bash
+        run: $SCREEN python -m smartram widget-test
+
+      # A real guardian must close a real idle process and keep a busy one.
+      - name: Closes real processes
+        run: python tools/e2e_close.py
 
       # The guardian must stay light: fail if it uses over 5% of a core or 250 MB.
-      - name: Own footprint (Linux)
-        if: runner.os == 'Linux'
-        run: xvfb-run -a python tools/footprint.py 45 5 250
+      - name: Own footprint
+        shell: bash
+        run: $SCREEN python tools/footprint.py 45 5 250
 
-      - name: Own footprint (Windows, macOS)
-        if: runner.os != 'Linux'
-        run: python tools/footprint.py 45 5 250
+      - name: Screenshots of the pet
+        continue-on-error: true
+        shell: bash
+        run: |
+          python -m pip install --quiet pillow
+          $SCREEN python tools/snap_pet.py shots
 
-      - name: Installer (Linux, macOS)
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pet-${{ matrix.os }}-py${{ matrix.python }}
+          path: shots
+          if-no-files-found: ignore
+
+      - name: Installer, update and uninstall (Linux, macOS)
         if: runner.os != 'Windows'
         env:
           SMARTRAM_SOURCE: ${{ github.workspace }}
           SMARTRAM_HOME: ${{ runner.temp }}/smartram
         run: |
           sh install.sh
+          sh install.sh                       # running it again is how people update
           sleep 8
-          "$SMARTRAM_HOME/venv/bin/smartram" status
-          "$SMARTRAM_HOME/venv/bin/smartram" doctor
+          test -L "$HOME/.local/bin/smartram"
+          "$HOME/.local/bin/smartram" status
+          "$HOME/.local/bin/smartram" doctor
           cat "$SMARTRAM_HOME/guardian.log"
-          "$SMARTRAM_HOME/venv/bin/smartram" uninstall
+          "$HOME/.local/bin/smartram" uninstall
+          test ! -e "$HOME/.local/bin/smartram"
+          test ! -e "$SMARTRAM_HOME"
+          ! grep -s "added by SmartRAM Guardian" "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"
 
-      - name: Installer (Windows)
+      - name: Installer, update and uninstall (Windows)
         if: runner.os == 'Windows'
         shell: powershell
         env:
@@ -74,11 +96,18 @@ jobs:
           SMARTRAM_HOME: ${{ runner.temp }}\smartram
         run: |
           .\install.ps1
+          .\install.ps1                       # running it again is how people update
           Start-Sleep -Seconds 8
-          $smartram = Join-Path $env:SMARTRAM_HOME 'venv\Scripts\smartram.exe'
-          & $smartram status
+          $bin = Join-Path $env:SMARTRAM_HOME 'bin'
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          if (($userPath -split ';') -notcontains $bin) { throw "not on the user PATH: $userPath" }
+          smartram status                     # the installer made the command work in this window
           if ($LASTEXITCODE -ne 0) { throw "status failed: $LASTEXITCODE" }
-          & $smartram doctor
+          smartram doctor
           Get-Content (Join-Path $env:SMARTRAM_HOME 'guardian.log')
-          & $smartram uninstall
+          smartram uninstall
           if ($LASTEXITCODE -ne 0) { throw "uninstall failed: $LASTEXITCODE" }
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          if (($userPath -split ';') -contains $bin) { throw 'uninstall left its folder on the user PATH' }
+          Start-Sleep -Seconds 10
+          if (Test-Path $env:SMARTRAM_HOME) { throw 'uninstall left its folder behind' }
