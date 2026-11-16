@@ -1,150 +1,133 @@
-# Setup and troubleshooting
+# Source setup and troubleshooting
 
-## Supported machine and source checkout
+These instructions describe the **v1.0.0 Python implementation**, not the retired
+Windows PowerShell guardian. The application supports Linux, macOS, and Windows.
+PowerShell/Pester scripts from v0.1.0 are no longer needed.
 
-Use Windows 10/11 with **Windows PowerShell 5.1 Desktop**, launched as a normal
-user from the Start menu or with `powershell.exe -NoProfile`. PowerShell 7,
-Linux, macOS, and WSL are not supported runtime environments: the sampler uses
-Windows DLLs and CIM classes, and startup uses `powershell.exe`.
+## Prerequisites and checkout
 
-No compiler, package restore, administrator session, or external PowerShell
-module is required to run the application. Use a writable user-owned directory.
-Installing Git or downloading source/development modules requires internet access;
-the guardian itself makes no network calls.
+Install Git and Python **3.8 or newer**, including pip and venv. CI tests Python
+3.12 on Linux, Windows, and macOS, plus Python 3.8 on Linux. Internet access is
+needed to obtain the source and install packages. Use a writable user directory,
+not an administrator/root shell.
 
-If Git is installed (`git --version`), run:
-
-```powershell
+```sh
 git clone https://github.com/pratiksangle01/SmartRAM-Guardian.git
-Set-Location .\SmartRAM-Guardian
-$PSVersionTable | Select-Object PSVersion, PSEdition
+cd SmartRAM-Guardian
 ```
 
-Expect version `5.1.*` and edition `Desktop`. If Git is unavailable, download
-**Code > Download ZIP** from the repository's GitHub page, review and unblock the
-trusted ZIP in File Explorer's Properties before extracting it, then change into
-the extracted directory (usually `SmartRAM-Guardian-main`). Do not run inside the
-ZIP viewer.
+Without Git, download **Code > Download ZIP** from GitHub, extract it, and open a
+terminal in the extracted directory containing `pyproject.toml`. Git update
+commands do not apply to ZIP downloads.
 
-## Script execution policy
+## Isolated install
 
-Windows may initially refuse `.ps1` files with “running scripts is disabled.”
-Inspect policy and permit local scripts for this terminal session only:
+Linux/macOS:
+
+```sh
+python3 --version
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install . pytest
+.venv/bin/python -m pytest -q
+```
+
+Windows PowerShell:
 
 ```powershell
-Get-ExecutionPolicy -List
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+py -3 --version
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install . pytest
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
-This does not change machine-wide policy and expires when the window closes.
-Review downloaded code before unblocking it. If an already extracted trusted ZIP
-still causes “not digitally signed,” unblock only the scripts in this checkout:
+If Windows has `python` rather than the `py` launcher, substitute `python` for
+`py -3` after checking `python --version` is at least 3.8. A Store alias that opens
+a download page is not an installed interpreter. No activation script is needed,
+so these commands require no execution-policy changes. The test extra is installed
+explicitly as `pytest`; it is not a runtime dependency in `pyproject.toml`.
 
-```powershell
-Get-ChildItem -Path . -Recurse -File -Include *.ps1,*.psm1 | Unblock-File
+There is no separate compile/build command. `pip install .` builds and installs
+the package and its `psutil` dependency. Expect a nonzero pytest test count and
+zero failures; the current suite has 20 test cases. Tests include background
+start/status/stop using a temporary application home, without enabling autostart.
+
+## Safe smoke test
+
+The current default mode is **auto**, not the old PowerShell observe default.
+Do not launch the normal daemon just to verify installation if you do not want
+its default behavior. The scan command reports candidates without closing apps:
+
+```sh
+.venv/bin/python -m smartram --help
+.venv/bin/python -m smartram scan
 ```
 
-The existing background launcher and scheduled task pass `-ExecutionPolicy Bypass`
-to their child `powershell.exe` process so startup does not depend on this terminal's
-session setting. This is process-local, not a saved machine policy change; review
-the code before starting it. Organization Group Policy can override process policy. If `MachinePolicy` or
-`UserPolicy` prevents execution, use your organization's approved process; do not
-change machine-wide policy or elevate to work around it.
+On Windows use `.\.venv\Scripts\python.exe` instead of `.venv/bin/python`.
+Scan creates the application data directory but does not register login startup.
+For an optional persistent observe-mode run, point `SMARTRAM_HOME` at a new,
+absolute, writable directory and create its `config.json` containing
+`{"mode": "observe", "widget": false}` before starting. For example on Linux/macOS:
 
-## First run (no scheduled task)
-
-From the repository root, with the supplied `config.json` unchanged:
-
-```powershell
-.\diagnose.ps1
-.\start.ps1
-Start-Sleep -Seconds 35
-.\status.ps1
-.\stop.ps1
+```sh
+export SMARTRAM_HOME="$PWD/.smartram-smoke"
+mkdir -p "$SMARTRAM_HOME"
+printf '%s\n' '{"mode":"observe","widget":false}' > "$SMARTRAM_HOME/config.json"
+.venv/bin/python -m smartram start --no-widget
+sleep 8
+.venv/bin/python -m smartram status
+.venv/bin/python -m smartram stop
 ```
 
-Diagnosis should show memory pressure, candidate processes, and the safety gate.
-Start should report a running guardian; status should show `observe`, a closed
-safety gate, and a recent sample. The first sample may be pending briefly; wait
-another sampling interval and check again. Logs are in `logs\guardian.log` and
-state in `state.json` by default. Stop requests shutdown and normally removes
-`guardian.pid`. If startup exits early, inspect the log and run the foreground,
-single-pass diagnostic below to expose errors without a persistent background
-process:
+On Windows set `$env:SMARTRAM_HOME` instead of `export`, use PowerShell's
+`New-Item`/`Set-Content` to create the directory/config, and `Start-Sleep -Seconds 8`.
+Do not overwrite an existing configuration. Expect status to show observe mode
+and a recent sample. Logs and state live under `SMARTRAM_HOME` (default
+`~/.smartram-guardian`): `guardian.log`, `state.json`, and `config.json`.
 
-```powershell
-.\src\Guardian.ps1 -Once
+## Desktop pet and installers
+
+The pet uses tkinter and a graphical desktop. Headless CI/sandboxes can run tests,
+scan, or `start --no-widget` without a display. To check Tk on a desktop:
+
+```sh
+.venv/bin/python -m tkinter
+.venv/bin/python -m smartram widget-test
 ```
 
-Configuration is validated before use; restore the supplied config if a local
-edit causes validation errors. Keep `Mode` set to `observe` for setup verification.
-Do not approve apps or enable automated actions just to test setup.
+If tkinter or venv is missing on Debian/Ubuntu, install the packages matching your
+Python (commonly `python3-tk` and `python3-venv`) through your approved system
+package manager. A separately installed Python may need its matching Tk package.
+The installers try to obtain missing dependencies, which may invoke sudo on
+Linux or winget on Windows; review the scripts before running them.
 
-## Optional logon startup
+The README's one-line installers download code, install dependencies, enable
+per-user login startup, and immediately start the guardian. They are not a
+read-only check. For a reviewed local checkout use `sh install.sh` on Linux/macOS
+or `.\install.ps1` in Windows PowerShell, following organizational execution policy.
+`SMARTRAM_SOURCE` overrides the source installed (including a local checkout);
+`SMARTRAM_HOME` overrides the installation/data location. Use the same home when
+issuing subsequent commands. To undo login startup use `smartram disable`.
+`smartram uninstall` stops the guardian, disables autostart, and **deletes its
+application data directory**, including configuration and logs.
 
-```powershell
-.\install.ps1
-.\start.ps1
-```
+## Common failures
 
-Before installing, check for an existing task:
+- **`python`/`pip` not found:** select the installed interpreter as above and use
+  `python -m pip`, not a potentially unrelated `pip` executable.
+- **Externally managed environment / permission denied:** install into the venv,
+  not system Python. Do not use sudo pip or disable system-package protections.
+- **Missing venv/ensurepip:** install your distribution's matching venv package,
+  then recreate the environment.
+- **`smartram` not found after install:** use the venv interpreter with
+  `-m smartram`, or its `bin/smartram` (`Scripts\smartram.exe` on Windows).
+  The Unix installer also creates `~/.local/bin/smartram`; that directory must be
+  on PATH to use the short command outside the venv.
+- **No display or Tk:** use `--no-widget` for daemon checks. CI uses Xvfb on Linux
+  for the separate widget check; a successful headless test is not GUI proof.
+- **Dependency download fails:** check approved network/proxy/package-index
+  configuration. No project API keys or credentials are needed.
 
-```powershell
-Get-ScheduledTask -TaskName SmartRAM-Guardian -ErrorAction SilentlyContinue |
-    Select-Object -ExpandProperty Actions | Format-List Execute, Arguments, WorkingDirectory
-```
-
-Install replaces a task with that name, and uninstall removes it; do not use
-either command if that task belongs to a different application or checkout.
-
-Installation validates config and registers the current user's
-`SmartRAM-Guardian` logon task; it does not start the guardian immediately.
-`install.ps1 -NoAutoStart` only validates config and creates the log directory.
-Scheduled-task registration can be restricted by local policy; manual startup
-and tests do not require a task. The task references this checkout, so uninstall
-before moving or deleting it:
-
-```powershell
-.\uninstall.ps1
-```
-
-## Development and tests
-
-There is no build step. The tests use Pester 3/4 syntax and include a live Windows
-observe-mode pass in a temporary directory. They do not require installation or
-app approvals. Pester 5 is not compatible with these suites. Do not assume a
-bundled module exists on every machine; check first:
-
-```powershell
-Get-Module -ListAvailable Pester, PSScriptAnalyzer | Select-Object Name, Version
-```
-
-If Pester 3.4.x or 4.x is available, the tests-only path needs no downloads:
-
-```powershell
-.\tests\Invoke-Tests.ps1 -NoAnalyzer
-```
-
-For the same tool versions as CI, install these modules for the current user
-once. These commands download from PowerShell Gallery and may prompt for
-repository trust; confirm only if allowed by your organization's policy:
-
-```powershell
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-Install-PackageProvider NuGet -MinimumVersion 2.8.5.201 -Scope CurrentUser -Force | Out-Null
-Install-Module Pester -RequiredVersion 3.4.0 -Scope CurrentUser -Repository PSGallery -Force -SkipPublisherCheck
-Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Repository PSGallery -Force
-.\tests\Invoke-Tests.ps1
-```
-
-`-SkipPublisherCheck` is specific to installing the older Pester release alongside
-Windows' bundled signed copy; it does not disable script execution policy. The
-runner explicitly imports a compatible Pester version even if Pester 5 is also
-installed. PSScriptAnalyzer is optional locally and explicitly reported as skipped
-if absent; CI always installs it. With it present, expect `no issues` after a
-nonzero test total with `Failed=0`. Failures or analyzer findings return exit code
-1; no compatible Pester or no discovered tests is an error, not a successful run.
-
-If Gallery access fails, check TLS 1.2, network/proxy policy, and repository access
-with `Get-PSRepository`. Use an approved internal module source if required;
-there are no credentials or API keys to configure for this project.
+After source updates, rerun the same venv's `python -m pip install --upgrade .`
+and `python -m pytest -q`. Use `git pull` only from a clean Git checkout.

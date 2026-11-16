@@ -2,30 +2,70 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   test:
-    name: Pester + PSScriptAnalyzer (Windows PowerShell 5.1)
-    runs-on: windows-latest
+    name: ${{ matrix.os }} / py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ['3.12']
+        include:
+          - os: ubuntu-22.04
+            python: '3.8'
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
 
-      - name: Show PowerShell version
-        shell: powershell
-        run: $PSVersionTable | Out-String | Write-Host
-
-      - name: Install test tools
-        shell: powershell
+      - name: Unit tests
         run: |
-          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-          Install-PackageProvider NuGet -MinimumVersion 2.8.5.201 -Scope CurrentUser -Force | Out-Null
-          Install-Module Pester -RequiredVersion 3.4.0 -Scope CurrentUser -Repository PSGallery -Force -SkipPublisherCheck
-          Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Repository PSGallery -Force
+          python -m pip install --upgrade pip
+          python -m pip install . pytest
+          python -m pytest -q
 
-      - name: Tests and static analysis (documented local command)
+      - name: Desktop pet opens (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb python3-tk
+          xvfb-run -a python -m smartram widget-test
+
+      - name: Desktop pet opens (Windows, macOS)
+        if: runner.os != 'Linux'
+        run: python -m smartram widget-test
+
+      - name: Installer (Linux, macOS)
+        if: runner.os != 'Windows'
+        env:
+          SMARTRAM_SOURCE: ${{ github.workspace }}
+          SMARTRAM_HOME: ${{ runner.temp }}/smartram
+        run: |
+          sh install.sh
+          sleep 8
+          "$SMARTRAM_HOME/venv/bin/smartram" status
+          "$SMARTRAM_HOME/venv/bin/smartram" uninstall
+
+      - name: Installer (Windows)
+        if: runner.os == 'Windows'
         shell: powershell
-        run: .\tests\Invoke-Tests.ps1
+        env:
+          SMARTRAM_SOURCE: ${{ github.workspace }}
+          SMARTRAM_HOME: ${{ runner.temp }}\smartram
+        run: |
+          .\install.ps1
+          Start-Sleep -Seconds 8
+          $smartram = Join-Path $env:SMARTRAM_HOME 'venv\Scripts\smartram.exe'
+          & $smartram status
+          if ($LASTEXITCODE -ne 0) { throw "status failed: $LASTEXITCODE" }
+          & $smartram uninstall
+          if ($LASTEXITCODE -ne 0) { throw "uninstall failed: $LASTEXITCODE" }
