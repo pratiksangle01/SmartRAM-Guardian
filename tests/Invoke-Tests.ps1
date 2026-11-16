@@ -1,8 +1,8 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Run the Pester test suite. Works on Windows PowerShell 5.1 with the
-    built-in Pester 3.4 (no downloads required).
+    Run tests on Windows PowerShell 5.1 with Pester 3.4.x or 4.x.
+    See docs/SETUP.md for optional development-tool installation.
 #>
 [CmdletBinding()]
 param(
@@ -12,13 +12,18 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-$pester = Get-Module -ListAvailable Pester | Sort-Object Version -Descending | Select-Object -First 1
+$pester = Get-Module -ListAvailable Pester |
+    Where-Object { $_.Version -ge [version]'3.4.0' -and $_.Version.Major -lt 5 } |
+    Sort-Object Version -Descending | Select-Object -First 1
 if (-not $pester) {
-    throw 'Pester was not found. On Windows 10/11 it ships with Windows PowerShell 5.1 (Pester 3.4).'
+    throw 'Pester 3.4.x or 4.x is required. See docs/SETUP.md for installation commands (Pester 5 is not supported).'
 }
+Import-Module $pester.Path -Force
 Write-Host ("Using Pester {0}" -f $pester.Version)
 
 $result = Invoke-Pester -Path $Path -PassThru
+if ($result.TotalCount -eq 0) { throw "No tests found at '$Path'." }
+$issues = @()
 Write-Host ''
 Write-Host ("Total={0} Passed={1} Failed={2} Skipped={3}" -f `
     $result.TotalCount, $result.PassedCount, $result.FailedCount, $result.SkippedCount)
@@ -29,12 +34,13 @@ if ($result.FailedCount -gt 0) {
 }
 
 if (-not $NoAnalyzer) {
-    $analyzer = Get-Module -ListAvailable PSScriptAnalyzer | Select-Object -First 1
+    $analyzer = Get-Module -ListAvailable PSScriptAnalyzer | Sort-Object Version -Descending | Select-Object -First 1
     if ($analyzer) {
+        Import-Module $analyzer.Path -Force
         Write-Host ''
         Write-Host 'PSScriptAnalyzer:'
-        $issues = Invoke-ScriptAnalyzer -Path (Join-Path (Split-Path -Parent $PSScriptRoot) '.') -Recurse `
-            -Severity Error, Warning -ExcludeRule PSAvoidUsingWriteHost, PSAvoidUsingPositionalParameters
+        $issues = @(Invoke-ScriptAnalyzer -Path (Join-Path (Split-Path -Parent $PSScriptRoot) '.') -Recurse `
+            -Severity Error, Warning -ExcludeRule PSAvoidUsingWriteHost, PSAvoidUsingPositionalParameters)
         if ($issues.Count -eq 0) { Write-Host '  no issues' }
         else { $issues | Format-Table RuleName, Severity, ScriptName, Line, Message -AutoSize | Out-String -Width 200 | Write-Host }
     }
@@ -43,4 +49,4 @@ if (-not $NoAnalyzer) {
     }
 }
 
-if ($result.FailedCount -gt 0) { exit 1 }
+if ($result.FailedCount -gt 0 -or $issues.Count -gt 0) { exit 1 }

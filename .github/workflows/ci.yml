@@ -18,32 +18,14 @@ jobs:
         shell: powershell
         run: $PSVersionTable | Out-String | Write-Host
 
-      - name: Install PSScriptAnalyzer
+      - name: Install test tools
         shell: powershell
         run: |
-          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
-          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force -AllowClobber
-          Get-Module -ListAvailable PSScriptAnalyzer | Select-Object Name, Version | Format-Table | Out-String | Write-Host
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          Install-PackageProvider NuGet -MinimumVersion 2.8.5.201 -Scope CurrentUser -Force | Out-Null
+          Install-Module Pester -RequiredVersion 3.4.0 -Scope CurrentUser -Repository PSGallery -Force -SkipPublisherCheck
+          Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Repository PSGallery -Force
 
-      - name: PSScriptAnalyzer
+      - name: Tests and static analysis (documented local command)
         shell: powershell
-        run: |
-          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error, Warning `
-            -ExcludeRule PSAvoidUsingWriteHost, PSAvoidUsingPositionalParameters
-          $results | Format-Table RuleName, Severity, ScriptName, Line, Message -AutoSize |
-            Out-String -Width 200 | Write-Host
-          if ($results.Count -gt 0) {
-            Write-Error "PSScriptAnalyzer reported $($results.Count) issue(s)."
-          }
-
-      - name: Unit and end-to-end tests (Pester 3.4, built into PS 5.1)
-        shell: powershell
-        run: |
-          $r = Invoke-Pester -Path .\tests -PassThru -Quiet
-          Write-Host ("Total={0} Passed={1} Failed={2} Skipped={3}" -f `
-            $r.TotalCount, $r.PassedCount, $r.FailedCount, $r.SkippedCount)
-          if ($r.FailedCount -gt 0) {
-            $r.TestResult | Where-Object { -not $_.Passed } |
-              ForEach-Object { Write-Host "FAIL: $($_.Describe) / $($_.Name): $($_.FailureMessage)" }
-            exit 1
-          }
+        run: .\tests\Invoke-Tests.ps1

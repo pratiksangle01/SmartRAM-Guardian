@@ -7,6 +7,8 @@ foreach ($m in 'SRG.Config', 'SRG.Logging', 'SRG.Sampler', 'SRG.Pressure', 'SRG.
 }
 
 function New-FakeProcess {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Creates an in-memory fake process object for tests; no external state changes.')]
+    [CmdletBinding()]
     param(
         [int]$ProcessId = 1000,
         [string]$Name = 'someapp',
@@ -34,6 +36,8 @@ function New-FakeProcess {
 }
 
 function New-FakeSample {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Creates an in-memory fake sample object for tests; no external state changes.')]
+    [CmdletBinding()]
     param(
         [double]$AvailableMiB = 2000,
         [double]$TotalMiB = 8000,

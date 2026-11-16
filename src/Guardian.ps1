@@ -35,7 +35,7 @@ $stopPath = Join-Path $root 'guardian.stop'
 
 function Test-StopRequested { Test-Path -LiteralPath $stopPath }
 
-function Wait-IntervalSeconds {
+function Wait-ForInterval {
     param([int]$Seconds)
     for ($i = 0; $i -lt $Seconds; $i++) {
         if (Test-StopRequested) { return }
@@ -201,7 +201,7 @@ try {
             if ($config.AdaptiveSampling -and $assessment.Actionable) {
                 $interval = $config.BusyIntervalSeconds
             }
-            Wait-IntervalSeconds -Seconds $interval
+            Wait-ForInterval -Seconds $interval
         }
     } while (-not $Once)
 }

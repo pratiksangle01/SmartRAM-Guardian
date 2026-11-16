@@ -46,6 +46,8 @@ function Test-SafetyGate {
 }
 
 function Test-CloseEligibility {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Retained for compatibility; eligibility depends only on the process and its classified safety state.')]
+    [CmdletBinding()]
     <#
     .SYNOPSIS
         Pure per-process decision for graceful close. Returns Eligible + Reason.
@@ -107,6 +109,8 @@ function Invoke-GracefulClose {
 }
 
 function Get-DisposableCandidates {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'Plural noun is part of the existing exported API and describes the returned collection.')]
+    [CmdletBinding()]
     <#
     .SYNOPSIS
         Learning loop, stage 1: propose candidates with evidence. Nothing is
@@ -124,7 +128,7 @@ function Get-DisposableCandidates {
     $candidates = foreach ($p in $ClassifiedProcesses) {
         if ($p.Class -eq 'Unknown' -and $p.HasMainWindow -and
             $p.WorkingSetMiB -ge $MinWorkingSetMiB -and
-            ($p.PSObject.Properties['CpuPercentSinceLast'] -eq $null -or $p.CpuPercentSinceLast -le $MaxCpuPercent)) {
+            ($null -eq $p.PSObject.Properties['CpuPercentSinceLast'] -or $p.CpuPercentSinceLast -le $MaxCpuPercent)) {
             $io = 'n/a'
             if ($p.PSObject.Properties['IoMiBPerSecSinceLast']) { $io = "$($p.IoMiBPerSecSinceLast) MiB/s IO" }
             [pscustomobject]@{
@@ -139,11 +143,14 @@ function Get-DisposableCandidates {
 }
 
 function Get-StartupSuggestions {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'Plural noun is part of the existing exported API and describes the returned collection.')]
+    [CmdletBinding()]
     <#
     .SYNOPSIS
         Read-only startup inventory for the suggestion lever. We report; we do
         not change anything here. User acts, or approves a future lever.
     #>
+    param()
     $items = New-Object System.Collections.Generic.List[object]
     $runKeys = @(
         'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run',
@@ -163,9 +170,8 @@ function Get-StartupSuggestions {
         }
     }
     # Chrome background mode is a classic quiet win: it keeps running after the
-    # window closes. We surface the state; changing it stays a manual/approved act.
+    # window closes. We surface policy state; changing it stays a manual act.
     try {
-        $chromeBg = Get-ItemProperty -Path 'HKCU:\Software\Google\Chrome\PreferenceMACs' -ErrorAction SilentlyContinue
         $chromeReg = Get-ItemProperty -Path 'HKCU:\Software\Policies\Google\Chrome' -Name BackgroundModeEnabled -ErrorAction SilentlyContinue
         if ($chromeReg) {
             $items.Add([pscustomobject]@{
@@ -175,7 +181,7 @@ function Get-StartupSuggestions {
             })
         }
     }
-    catch { }
+    catch { [void]$_ }
     return , $items.ToArray()
 }
 

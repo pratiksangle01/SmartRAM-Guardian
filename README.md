@@ -58,25 +58,36 @@ scheduled task and runtime files.
 
 ## Quick start (Windows PowerShell 5.1)
 
-```powershell
-# From the repository folder, one line:
-Set-Location .\SmartRAM-Guardian; .\diagnose.ps1
-```
+Use Windows 10/11 and **Windows PowerShell 5.1** (`powershell.exe`), not PowerShell
+7 (`pwsh`), WSL, Linux, or macOS. No external modules or administrator rights are
+needed at runtime. Getting the source requires Git or a ZIP download; optional
+development tools require internet access.
 
-That takes two samples one second apart, prints pressure analysis, the top
-working sets with their class, disposable candidates and the memory-priority
-targets. It changes nothing.
-
-Then, when you want it running quietly:
+See [Setup and troubleshooting](docs/SETUP.md) for prerequisites, ZIP downloads,
+execution policy, expected output, and test dependencies. In a normal
+(non-administrator) Windows PowerShell window:
 
 ```powershell
-.\install.ps1              # validates config, registers a per-user logon task
-.\start.ps1                # or let the next logon start it
+git clone https://github.com/pratiksangle01/SmartRAM-Guardian.git
+Set-Location .\SmartRAM-Guardian
+$PSVersionTable.PSVersion  # must be 5.1
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+.\diagnose.ps1
+.\start.ps1
+Start-Sleep -Seconds 35
 .\status.ps1
+.\stop.ps1
 ```
 
-Requirements: Windows 10/11, Windows PowerShell 5.1 (built in), no admin
-rights, no downloads, no external modules at runtime.
+Diagnosis is read-only. Starting the guardian writes logs and state, but the
+default `observe` mode takes no memory-management actions. Status should show a
+running guardian, `observe`, and a recent sample (wait another interval if the
+first sample is pending). This smoke test needs no installation or scheduled task.
+
+To opt into automatic startup at logon, run `.\install.ps1` after the smoke test,
+then `.\start.ps1` if you want it running immediately. Installation alone does not
+start it. Keep the checkout in place while the task is installed;
+`.\uninstall.ps1` removes the task and runtime state.
 
 ## Commands
 
@@ -259,9 +270,19 @@ src/SRG.Actions.psm1    safety gate, graceful close, candidates, suggestions
 src/Guardian.ps1        the loop
 ```
 
-Tests: `tests\Invoke-Tests.ps1`. CI (`.github/workflows/ci.yml`) runs
-PSScriptAnalyzer and the Pester suite on `windows-latest` with Windows
-PowerShell 5.1.
+There is no compilation/build step. After installing compatible Pester as
+explained in [Development and tests](docs/SETUP.md#development-and-tests), run:
+
+```powershell
+.\tests\Invoke-Tests.ps1
+```
+
+A successful run reports a nonzero total and `Failed=0`. Static analysis also
+runs when PSScriptAnalyzer is installed; test failures or analyzer findings return
+exit code 1. Use `-NoAnalyzer` for tests only. CI installs pinned tools and runs
+the same command on Windows PowerShell 5.1. Pester 5 is not supported by these
+suites. See the [setup audit](docs/SETUP-AUDIT.md) for setup gaps and verification
+limits found during the documentation walkthrough.
 
 ## License and references
 
