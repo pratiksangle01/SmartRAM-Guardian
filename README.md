@@ -125,12 +125,12 @@ A memory tool should not be the thing using your memory.
 
 | System | CPU (of one core) | Memory |
 | --- | --- | --- |
-| Windows | 0.28% | 34 MB |
-| macOS | 0.62% | 95 MB |
-| Linux | 0.22% | 32 MB |
+| Windows | 0.2–0.4% | 34 MB |
+| macOS | 0.6–0.8% | 95 MB |
+| Linux | 0.1–0.2% | 26–32 MB |
 
-Measured at v1.2.0 with the dolphin on screen, on GitHub's hosted test machines
-(135 to 516 running processes). Every change is measured again, and the build
+Measured with the dolphin on screen over several runs on GitHub's hosted test
+machines (135 to 547 running processes). Every change is measured again, and the build
 fails above 5% of a core or 250 MB. Measure your own machine with `python tools/footprint.py`.
 
 ## Settings

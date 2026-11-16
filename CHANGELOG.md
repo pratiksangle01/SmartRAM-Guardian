@@ -7,7 +7,7 @@
 - Fixed: the `smartram` command now works in a new terminal after installing on Windows and macOS. Uninstall undoes this.
 - Fixed: on macOS only the status dot was visible while the panel was closed; the dolphin is back. On Windows it no longer has a dark fringe on light backgrounds.
 - Fixed: on Windows a click on the taskbar or the desktop made every app count as "in use" for that moment, which kept resetting how long apps had been idle.
-- Lighter on Windows: a full scan cost roughly a third of what it did in our test run.
+- Lighter on Windows: a scan no longer asks for the state of every process, which is slow there.
 - Suggestions have an **Allow** button with a confirmation, list only whole apps (never system components or another app's helpers), and show the app's full size.
 - The panel shows one row per app instead of one per process.
 - Safer focus detection: Store apps on Windows are recognised as the app in use, and a window that belongs to another account no longer counts.

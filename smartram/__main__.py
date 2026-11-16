@@ -216,6 +216,8 @@ def cmd_doctor(paths, _args):
         import tkinter
         tkinter.Tk().destroy()
         pet = "ok (Tk %s)" % tkinter.TkVersion
+        if tkinter.TkVersion < 8.6:
+            pet = "Tk %s is old and may draw badly; a newer Python fixes that" % tkinter.TkVersion
     except ImportError:
         pet = "not available: this Python has no tkinter"
     except Exception:
