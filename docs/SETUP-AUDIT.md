@@ -6,7 +6,9 @@ The initial 2026-11-16 audit examined v0.1.0, a Windows PowerShell 5.1 applicati
 While this PR was open, base commit `3bc9b06` replaced it with the cross-platform
 Python v1.0.0 application. This merge preserves that replacement and its Python
 CI; it does not resurrect deleted PowerShell scripts or Pester tests. The setup
-guide has been rewritten for the current source. The findings below distinguish
+guide has been rewritten for the current source. A subsequent merge of v1.1.0
+(`1f26716`) preserves its expanded README, contributing guide, performance gates,
+and capability diagnostics, while retaining the source-setup links. The findings below distinguish
 historical evidence from current instructions.
 
 ## Current newcomer path

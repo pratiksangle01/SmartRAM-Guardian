@@ -10,6 +10,7 @@ from .rules import normalize
 # key: (default, min, max)
 _NUMBERS = {
     "interval_seconds": (5, 1, 300),
+    "calm_interval_seconds": (30, 1, 3600),
     "act_above_percent": (60, 0, 100),
     "idle_cpu_percent": (1.0, 0.0, 100.0),
     "idle_samples": (3, 1, 100),
@@ -17,10 +18,12 @@ _NUMBERS = {
     "close_timeout_seconds": (10, 1, 300),
     "retry_minutes": (10, 0, 1440),
     "max_retries": (3, 1, 100),
+    "self_cpu_limit_percent": (2.0, 0.1, 100.0),
 }
+_BOOLS = {"widget": True, "allow_without_focus": False}
 MODES = ("auto", "observe")
 DEFAULTS = dict({k: v[0] for k, v in _NUMBERS.items()},
-                mode="auto", close_list=[], protect_list=[], widget=True)
+                mode="auto", close_list=[], protect_list=[], **_BOOLS)
 
 
 class Paths:
@@ -32,6 +35,7 @@ class Paths:
         self.pid = self.home / "guardian.pid"
         self.pause = self.home / "guardian.pause"
         self.stop = self.home / "guardian.stop"
+        self.clean = self.home / "guardian.clean"
         self.log = self.home / "guardian.log"
 
     def ensure(self):
@@ -57,8 +61,13 @@ def validate(raw):
             cfg["mode"] = raw["mode"]
         else:
             warnings.append("mode must be auto or observe; using auto")
-    if "widget" in raw:
-        cfg["widget"] = bool(raw["widget"])
+    for key, default in _BOOLS.items():
+        if key not in raw:
+            continue
+        if isinstance(raw[key], bool):
+            cfg[key] = raw[key]
+        else:
+            warnings.append("%s must be true or false; using %s" % (key, str(default).lower()))
     for key in ("close_list", "protect_list"):
         v = raw.get(key, [])
         if isinstance(v, list) and all(isinstance(x, str) for x in v):

@@ -1,6 +1,6 @@
 # Source setup and troubleshooting
 
-These instructions describe the **v1.0.0 Python implementation**, not the retired
+These instructions describe the **v1.1.0 Python implementation**, not the retired
 Windows PowerShell guardian. The application supports Linux, macOS, and Windows.
 PowerShell/Pester scripts from v0.1.0 are no longer needed.
 
@@ -50,7 +50,7 @@ explicitly as `pytest`; it is not a runtime dependency in `pyproject.toml`.
 
 There is no separate compile/build command. `pip install .` builds and installs
 the package and its `psutil` dependency. Expect a nonzero pytest test count and
-zero failures; the current suite has 20 test cases. Tests include background
+zero failures; the test count can grow between releases. Tests include background
 start/status/stop using a temporary application home, without enabling autostart.
 
 ## Safe smoke test
@@ -89,7 +89,8 @@ and a recent sample. Logs and state live under `SMARTRAM_HOME` (default
 ## Desktop pet and installers
 
 The pet uses tkinter and a graphical desktop. Headless CI/sandboxes can run tests,
-scan, or `start --no-widget` without a display. To check Tk on a desktop:
+scan, or `start --no-widget` without a display. `python -m smartram doctor` reports
+platform capabilities, including foreground detection. To check Tk on a desktop:
 
 ```sh
 .venv/bin/python -m tkinter
