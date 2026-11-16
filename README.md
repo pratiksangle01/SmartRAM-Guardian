@@ -125,9 +125,9 @@ A memory tool should not be the thing using your memory.
 
 | System | CPU (of one core) | Memory |
 | --- | --- | --- |
-| Windows | 0.2–0.4% | 34 MB |
-| macOS | 0.6–0.8% | 95 MB |
-| Linux | 0.1–0.2% | 26–32 MB |
+| Windows | about 0.3% | 34 MB |
+| macOS | under 1% | 95 MB |
+| Linux | about 0.2% | 26–32 MB |
 
 Measured with the dolphin on screen over several runs on GitHub's hosted test
 machines (135 to 547 running processes). Every change is measured again, and the build
