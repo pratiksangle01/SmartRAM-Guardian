@@ -18,18 +18,59 @@ def _run(cmd):
         return ""
 
 
-def _windows():
+def _user32():
     import ctypes
     from ctypes import wintypes
     user32 = ctypes.windll.user32
+    enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     user32.GetForegroundWindow.restype = wintypes.HWND
+    user32.GetDesktopWindow.restype = wintypes.HWND
     user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
-    hwnd = user32.GetForegroundWindow()
+    user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.EnumChildWindows.argtypes = [wintypes.HWND, enum_proc, wintypes.LPARAM]
+    return user32, enum_proc
+
+
+def window_pid(hwnd):
+    import ctypes
+    from ctypes import wintypes
+    pid = wintypes.DWORD()
+    _user32()[0].GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    return pid.value or None
+
+
+def window_class(hwnd):
+    import ctypes
+    buf = ctypes.create_unicode_buffer(256)
+    _user32()[0].GetClassNameW(hwnd, buf, 256)
+    return buf.value
+
+
+def child_window_pid(hwnd, class_name):
+    """PID that owns the first window inside hwnd with this class, or None."""
+    user32, enum_proc = _user32()
+    found = []
+
+    def cb(child, _):
+        if window_class(child) == class_name:
+            found.append(window_pid(child))
+            return False
+        return True
+
+    user32.EnumChildWindows(hwnd, enum_proc(cb), 0)
+    return found[0] if found else None
+
+
+def _windows():
+    hwnd = _user32()[0].GetForegroundWindow()
     if not hwnd:
         return None
-    pid = wintypes.DWORD()
-    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-    return pid.value or None
+    # Store apps draw inside a shared frame window; the app itself owns a child of it.
+    if window_class(hwnd) == "ApplicationFrameWindow":
+        pid = child_window_pid(hwnd, "Windows.UI.Core.CoreWindow")
+        if pid:
+            return pid
+    return window_pid(hwnd)
 
 
 def _macos():

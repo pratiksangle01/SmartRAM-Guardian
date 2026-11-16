@@ -1,6 +1,9 @@
 """Process name rules: what is never touched, what is background junk."""
 from __future__ import annotations
 
+import os
+import sys
+
 _SUFFIXES = (".exe", ".app", ".bin")
 
 
@@ -59,6 +62,17 @@ PROTECTED = frozenset(normalize(n) for n in (
     "cmake", "cargo", "rustc", "node", "gradle", "java", "javac", "go", "gcc",
     "g++", "clang", "ld", "pip", "pip3", "npm", "pnpm", "yarn", "robocopy", "xcopy",
     "teracopy", "rclone", "rsync", "cp", "mv", "dd", "tar",
+    # Windows shell parts that host other apps' windows and input
+    "ApplicationFrameHost", "TextInputHost", "LockApp", "SearchApp", "SearchUI",
+    "Taskmgr", "smartscreen", "backgroundTaskHost", "UserOOBEBroker", "msedgewebview2",
+    # Linux desktop parts and input methods
+    "xfce4-panel", "xfdesktop", "xfsettingsd", "mate-panel", "caja", "marco",
+    "nemo-desktop", "lxqt-panel", "budgie-panel", "kded5", "kded6", "kdeinit5",
+    "kwalletd5", "kwalletd6", "ibus-daemon", "fcitx", "fcitx5", "gpg-agent", "gjs",
+    "mutter", "openbox", "waybar", "polybar",
+    # Databases and servers
+    "postgres", "mysqld", "mariadbd", "mongod", "redis-server", "nginx", "httpd",
+    "apache2", "sqlservr", "ollama",
     # The guardian itself
     "smartram", "SmartRAM-Guardian",
 ))
@@ -77,20 +91,22 @@ JUNK = frozenset(normalize(n) for n in (
     "GoogleSoftwareUpdateAgent", "ksfetch", "Keystone", "Microsoft AutoUpdate",
     "Microsoft Update Assistant", "AdobeCRDaemon", "Adobe Crash Reporter",
     "AdobeResourceSynchronizer", "Dropbox Update",
-    # Linux
-    "update-notifier", "update-manager", "gnome-software", "snap-store",
-    "apport-gtk", "kerneloops-applet", "deja-dup-monitor",
+    # Linux (not update notifiers or backup schedulers: closing those has a cost)
+    "gnome-software", "snap-store", "apport-gtk", "kerneloops-applet",
 ))
 
 _JUNK_SUFFIXES = ("crashpad_handler", "crashhandler", "crashhandler64")
 
 # While one of these runs, nothing is closed (an install/upgrade is in progress).
 INSTALLERS = frozenset(normalize(n) for n in (
-    "msiexec", "setup", "install", "installer", "TiWorker", "TrustedInstaller",
+    "msiexec", "setup", "install", "installer",
     "winget", "choco", "scoop", "apt", "apt-get", "aptitude", "dpkg", "dnf", "yum",
     "rpm", "zypper", "pacman", "yay", "paru", "flatpak", "brew", "softwareupdate",
-    "unattended-upgr", "unattended-upgrade", "do-release-upgrade",
+    "do-release-upgr",
 ))
+# Deliberately absent: services that are always or often running without an install
+# in progress (Ubuntu's unattended-upgr, Windows' TiWorker and TrustedInstaller).
+# Listing them would stop the guardian from ever closing anything.
 
 
 def is_protected(norm, extra=()):
@@ -99,3 +115,18 @@ def is_protected(norm, extra=()):
 
 def is_junk(norm):
     return norm in JUNK or norm.endswith(_JUNK_SUFFIXES)
+
+
+def looks_like_app(path, platform=None, windows_dir=None):
+    """True when an executable path is an ordinary app rather than a system component."""
+    if not path:
+        return False
+    platform = platform or sys.platform
+    if platform == "win32":
+        root = (windows_dir or os.environ.get("SystemRoot") or r"C:\Windows").rstrip("\\/")
+        return not path.replace("/", "\\").lower().startswith(root.lower() + "\\")
+    if platform == "darwin":
+        # The main program of an app bundle; helpers and services are nested deeper.
+        return (".app/Contents/MacOS/" in path and path.count(".app/") == 1
+                and not path.startswith("/System/Library/"))
+    return "/libexec/" not in path and not path.startswith(("/usr/sbin/", "/sbin/"))

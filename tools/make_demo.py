@@ -37,13 +37,17 @@ SAMPLE = {
 }
 
 
+def sample_engine(work):
+    """Something the widget accepts in place of the real engine, showing SAMPLE."""
+    return types.SimpleNamespace(snapshot=SAMPLE, paths=config.Paths(work).ensure(),
+                                 cfg=dict(config.DEFAULTS), watching=False, wake=lambda: None)
+
+
 def main():
     out = os.path.join(REPO, "docs")
     os.makedirs(out, exist_ok=True)
     work = tempfile.mkdtemp()
-    engine = types.SimpleNamespace(snapshot=SAMPLE, paths=config.Paths(work).ensure(),
-                                   cfg=dict(config.DEFAULTS), watching=False, wake=lambda: None)
-    w = widget.Widget(engine, threading.Event())
+    w = widget.Widget(sample_engine(work), threading.Event())
     root = w.root
     sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
 

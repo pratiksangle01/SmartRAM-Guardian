@@ -45,9 +45,6 @@ fi
 "$VENV/bin/python" -m pip install --quiet --upgrade pip
 "$VENV/bin/python" -m pip install --quiet --upgrade "$SOURCE"
 
-mkdir -p "$HOME/.local/bin"
-ln -sf "$VENV/bin/smartram" "$HOME/.local/bin/smartram"
-
 "$VENV/bin/smartram" stop >/dev/null 2>&1 || true
 "$VENV/bin/smartram" enable
 "$VENV/bin/smartram" start
@@ -55,4 +52,4 @@ ln -sf "$VENV/bin/smartram" "$HOME/.local/bin/smartram"
 if ! "$VENV/bin/python" -c 'import tkinter' 2>/dev/null; then
     echo "Note: Python has no tkinter here, so the guardian runs without the desktop pet."
 fi
-echo "Installed. Command: $HOME/.local/bin/smartram"
+"$VENV/bin/smartram" link

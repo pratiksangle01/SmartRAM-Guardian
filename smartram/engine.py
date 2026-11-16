@@ -1,4 +1,4 @@
-"""Sampling, decisions and safe closing of idle background junk."""
+"""Sampling, decisions and safe closing of idle background apps."""
 from __future__ import annotations
 
 import json
@@ -27,6 +27,14 @@ SUGGEST_IDLE_SECONDS = 15 * 60
 MAX_SLOWDOWN = 8
 HIGH_PERCENT = 90  # RAM this full is watched at the fast interval
 RAM_FINE = "RAM is fine"
+
+# When instances of one app are kept for different reasons, the panel shows the first of these.
+_RANK = ("in use", "protected", "busy", "just started", "focus unknown", "no permission",
+         "keeps coming back", "retry later", "too small")
+
+
+def _rank(reason):
+    return _RANK.index(reason) if reason in _RANK else len(_RANK)
 
 
 def make_proc(pid, name, rss=0, cpu=0.0, ppid=1, create=0.0):
@@ -72,7 +80,10 @@ class Sampler:
                     cpu = max(0.0, total - prev) / dt * 100.0
                 seen[key] = total
             mi = i.get("memory_info")
-            procs.append(make_proc(i["pid"], i["name"], mi.rss if mi else 0, cpu,
+            # Linux reports the part shared with other processes; leaving it out keeps
+            # an app with many processes from being counted several times over.
+            rss = mi.rss - getattr(mi, "shared", 0) if mi else 0
+            procs.append(make_proc(i["pid"], i["name"], rss, cpu,
                                    i.get("ppid") or 0, key[1]))
         self._prev = seen
         return read_memory(), procs
@@ -96,8 +107,8 @@ class SelfMeter:
         return {"cpu": cpu, "rss": self._proc.memory_info().rss}
 
 
-class Owner:
-    """True for processes that belong to the current user."""
+class Inspector:
+    """Slow facts about a process, looked up only when needed and remembered."""
 
     def __init__(self):
         try:
@@ -106,21 +117,36 @@ class Owner:
             self._me = None
         self._cache = {}
 
-    def __call__(self, proc):
-        key = (proc.pid, proc.create)
+    def _get(self, proc, kind, read):
+        key = (proc.pid, proc.create, kind)
         if key not in self._cache:
-            if len(self._cache) > 512:
+            if len(self._cache) > 1024:
                 self._cache.clear()
             try:
-                mine = self._me is not None and psutil.Process(proc.pid).username() == self._me
+                self._cache[key] = read(psutil.Process(proc.pid))
             except (psutil.Error, OSError):
-                mine = False
-            self._cache[key] = mine
+                self._cache[key] = None
         return self._cache[key]
+
+    def owned(self, proc):
+        """True when the process belongs to the current user."""
+        return self._me is not None and self._get(proc, "user", lambda p: p.username()) == self._me
+
+    def app_like(self, proc):
+        """True when the program is an ordinary app rather than a system component."""
+        return rules.looks_like_app(self._get(proc, "exe", lambda p: p.exe()))
+
+
+def _unique_bytes(proc):
+    """Memory that only this process holds; its resident size when that is not readable."""
+    try:
+        return psutil.Process(proc.pid).memory_full_info().uss
+    except Exception:
+        return proc.rss
 
 
 class Closer:
-    """Asks a process to exit. Never force-kills an app that has windows."""
+    """Asks an app to exit through its main process. Never force-kills an app that has windows."""
 
     def __init__(self):
         try:
@@ -128,21 +154,21 @@ class Closer:
         except Exception:
             self._me = None
 
-    def request(self, proc):
-        """Return (requested, bytes that will be freed, reason if not requested)."""
+    def request(self, proc, family=()):
+        """Ask proc to exit; family is the rest of its process tree, which goes with it.
+
+        Returns (requested, bytes that will be freed, reason if not requested).
+        """
         try:
             p = psutil.Process(proc.pid)
             if abs(p.create_time() - proc.create) > 1:
                 return False, 0, "gone"
             if self._me is None or p.username() != self._me:
                 return False, 0, "no permission"
-            try:
-                freed = p.memory_full_info().uss
-            except Exception:
-                freed = proc.rss
-            if sys.platform == "win32" and _post_wm_close(proc.pid):
+            freed = sum(_unique_bytes(m) for m in [proc] + list(family))
+            if sys.platform == "win32" and post_wm_close([proc.pid] + [m.pid for m in family]):
                 return True, freed, ""
-            # SIGTERM on POSIX; on Windows only reached for windowless helpers.
+            # SIGTERM on POSIX; on Windows only reached when the app shows no window.
             p.terminate()
             return True, freed, ""
         except psutil.NoSuchProcess:
@@ -151,10 +177,11 @@ class Closer:
             return False, 0, "no permission"
 
 
-def _post_wm_close(pid):
-    """Send WM_CLOSE to the visible windows of pid. Returns how many were asked."""
+def post_wm_close(pids):
+    """Windows: send WM_CLOSE to the visible windows of these PIDs. Returns how many."""
     import ctypes
     from ctypes import wintypes
+    pids = set(pids)
     user32 = ctypes.windll.user32
     enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     user32.EnumWindows.argtypes = [enum_proc, wintypes.LPARAM]
@@ -167,7 +194,7 @@ def _post_wm_close(pid):
     def cb(hwnd, _):
         owner = wintypes.DWORD()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
-        if owner.value == pid and user32.IsWindowVisible(hwnd):
+        if owner.value in pids and user32.IsWindowVisible(hwnd):
             found.append(hwnd)
         return True
 
@@ -177,33 +204,64 @@ def _post_wm_close(pid):
     return len(found)
 
 
-def active_tree(by_pid, root):
+def parent_of(by_pid, proc):
+    """The live parent of proc, or None. A 'parent' that started later is a reused PID."""
+    parent = by_pid.get(proc.ppid)
+    if parent is None or parent.pid == proc.pid or parent.create > proc.create + 1:
+        return None
+    return parent
+
+
+def children_map(by_pid):
+    out = {}
+    for p in by_pid.values():
+        if parent_of(by_pid, p) is not None:
+            out.setdefault(p.ppid, []).append(p)
+    return out
+
+
+def descendants(children, pid):
+    """Every process below pid."""
+    out, stack, seen = [], [pid], {pid}
+    while stack:
+        for child in children.get(stack.pop(), ()):
+            if child.pid not in seen:
+                seen.add(child.pid)
+                out.append(child)
+                stack.append(child.pid)
+    return out
+
+
+def main_process(by_pid, proc):
+    """The top-most ancestor with the same name: the process that stands for the app."""
+    for _ in range(64):
+        parent = parent_of(by_pid, proc)
+        if parent is None or parent.norm != proc.norm:
+            break
+        proc = parent
+    return proc
+
+
+def active_tree(by_pid, root, children=None):
     """PIDs of root, its ancestors and its descendants."""
     if root not in by_pid:
         return set()
-    out, pid = {root}, root
-    while True:
-        parent = by_pid[pid].ppid
-        if parent in out or parent not in by_pid:
+    out, proc = {root}, by_pid[root]
+    for _ in range(64):
+        proc = parent_of(by_pid, proc)
+        if proc is None or proc.pid in out:
             break
-        out.add(parent)
-        pid = parent
-    children = {}
-    for p in by_pid.values():
-        children.setdefault(p.ppid, []).append(p.pid)
-    stack = [root]
-    while stack:
-        for child in children.get(stack.pop(), ()):
-            if child not in out:
-                out.add(child)
-                stack.append(child)
+        out.add(proc.pid)
+    if children is None:
+        children = children_map(by_pid)
+    out.update(p.pid for p in descendants(children, root))
     return out
 
 
 class Engine:
     def __init__(self, paths, sampler=None, closer=None, foreground=foreground_pid,
                  clock=time.time, memory=read_memory, battery=on_battery,
-                 self_usage=None, owned=None, dry_run=False):
+                 self_usage=None, owned=None, app_like=None, dry_run=False):
         self.paths = paths
         self.dry_run = dry_run  # look only: close nothing, consume no requests
         self.sampler = sampler or Sampler()
@@ -213,11 +271,13 @@ class Engine:
         self.memory = memory
         self.battery = battery
         self.self_usage = self_usage or SelfMeter()
-        self.owned = owned or Owner()
+        inspector = Inspector()
+        self.owned = owned or inspector.owned
+        self.app_like = app_like or inspector.app_like
         self.cfg, self._cfg_mtime = dict(cfgmod.DEFAULTS), None
         self._idle = {}        # (pid, create) -> consecutive idle samples
         self._idle_since = {}  # (pid, create) -> when it became idle
-        self._pending = {}     # pid -> close request awaiting exit
+        self._pending = {}     # main pid -> close request awaiting exit
         self._attempts = {}    # name -> (ticks with a close request, last time)
         self._denied = set()   # (pid, create) we are not allowed to close
         self._last_fg = None
@@ -277,14 +337,24 @@ class Engine:
                 del self._pending[pid]
                 log.info("%s (pid %s) did not exit; left running", req["name"], pid)
 
+    def _is_junk(self, norm):
+        return self.cfg["close_builtin_junk"] and rules.is_junk(norm)
+
+    def _closing_pids(self, children):
+        """PIDs of the apps that were asked to close, helpers included."""
+        out = set(self._pending)
+        for pid in self._pending:
+            out.update(m.pid for m in descendants(children, pid))
+        return out
+
     def _reason_kept(self, p, active, now, protect, targets, this_tick=()):
-        """Why p is not closed right now; '' means it is a close candidate."""
+        """Why the app whose main process is p stays; '' means p itself may be closed."""
         cfg = self.cfg
         if rules.is_protected(p.norm, protect):
             return "protected"
         if p.pid in active:
             return "in use"
-        junk = rules.is_junk(p.norm)
+        junk = self._is_junk(p.norm)
         if p.norm not in targets and not junk:
             return "not on close list"
         # Without knowing which app is in use, a user's own app could be the one
@@ -309,27 +379,32 @@ class Engine:
                 return "retry later"
         return ""
 
-    def _suggestions(self, procs, now, protect, targets):
-        """Big apps idle in the background for a long time that the user could allow."""
+    def _suggestions(self, procs, by_pid, children, now, protect, targets):
+        """Big apps that have sat idle in the background for a long time."""
         groups = {}
         for p in procs:
-            if p.pid in self._self:
+            if p.pid in self._self or p.norm in targets:
                 continue
-            g = groups.setdefault(p.norm, {"name": p.name, "bytes": 0, "since": 0.0, "procs": []})
-            g["bytes"] += p.rss
-            g["procs"].append(p)
-            start = self._idle_since.get((p.pid, p.create))
-            # One busy or in-use instance means the whole app is not idle.
-            g["since"] = None if start is None or g["since"] is None else max(g["since"], start)
+            if rules.is_protected(p.norm, protect) or rules.is_junk(p.norm):
+                continue
+            # Apps the session started, not helpers: those go when their own app goes.
+            parent = parent_of(by_pid, p)
+            if parent is not None and parent.pid != 1 and not rules.is_protected(parent.norm):
+                continue
+            g = groups.setdefault(p.norm, {"name": p.name, "bytes": 0, "since": 0.0, "mains": []})
+            g["mains"].append(p)
+            for m in [p] + descendants(children, p.pid):
+                g["bytes"] += m.rss
+                start = self._idle_since.get((m.pid, m.create))
+                # One busy or in-use process means the whole app is not idle.
+                g["since"] = None if start is None or g["since"] is None else max(g["since"], start)
         out = []
-        for norm, g in groups.items():
+        for g in groups.values():
             if g["since"] is None or now - g["since"] < SUGGEST_IDLE_SECONDS:
                 continue
-            if g["bytes"] < SUGGEST_MIN_BYTES or norm in targets:
+            if g["bytes"] < SUGGEST_MIN_BYTES:
                 continue
-            if rules.is_protected(norm, protect) or rules.is_junk(norm):
-                continue
-            if not all(self.owned(p) for p in g["procs"]):
+            if not all(self.owned(p) and self.app_like(p) for p in g["mains"]):
                 continue
             out.append({"name": g["name"], "bytes": g["bytes"],
                         "idle_minutes": int((now - g["since"]) // 60)})
@@ -364,14 +439,16 @@ class Engine:
         cfg = self.cfg
         mem, procs = self.sampler()
         by_pid = {p.pid: p for p in procs}
+        children = children_map(by_pid)
 
         fg = self.foreground()
-        # Clicking the pet must not make the guardian itself "the app in use".
-        if fg in self._self or fg not in by_pid:
+        # Clicking the pet must not make the guardian itself "the app in use", and a
+        # window of another account (or a PID from inside a sandbox) proves nothing.
+        if fg in self._self or fg not in by_pid or not self.owned(by_pid[fg]):
             fg = self._last_fg if self._last_fg in by_pid else None
         self._last_fg = fg
         self._focus_known = fg is not None
-        active = active_tree(by_pid, fg)
+        active = active_tree(by_pid, fg, children)
         self._resolve_pending(now, by_pid)
 
         idle, since = {}, {}
@@ -403,17 +480,27 @@ class Engine:
             note = ""
 
         protect, targets = set(cfg["protect_list"]), set(cfg["close_list"])
-        kept, would_close, this_tick, requested = [], [], set(), 0
         self._denied &= {(p.pid, p.create) for p in procs}
+        # An app is decided as a whole, through its main process: helpers are never
+        # closed on their own, and one busy helper keeps the whole app.
+        main = {p.pid: main_process(by_pid, p) for p in procs}
+        going = self._closing_pids(children)
+        outcome, would_close, this_tick, requested = {}, [], set(), 0
         for p in procs:
-            if p.pid in self._self or p.pid in self._pending:
+            if main[p.pid] is not p or p.pid in self._self or p.pid in going:
                 continue
             reason = self._reason_kept(p, active, now, protect, targets, this_tick)
+            family = ()
+            if not reason:
+                family = [m for m in descendants(children, p.pid) if m.pid not in self._self]
+                if any(self._idle.get((m.pid, m.create), 0) < cfg["idle_samples"]
+                       for m in family):
+                    reason = "busy"
             if not reason and note:
                 would_close.append(p.name)
                 reason = note
             elif not reason:
-                ok, freed, why = self.closer.request(p)
+                ok, freed, why = self.closer.request(p, family)
                 if ok:
                     if p.norm not in this_tick:
                         this_tick.add(p.norm)
@@ -427,8 +514,22 @@ class Engine:
                     continue
                 self._denied.add((p.pid, p.create))
                 reason = why
-            is_target = p.norm in targets or rules.is_junk(p.norm)
-            kept.append((is_target, p.rss, p.name, reason))
+            outcome[p.pid] = reason
+
+        # One row per app name: its processes added up, with the most telling reason.
+        kept, going = {}, self._closing_pids(children)
+        for p in procs:
+            reason = outcome.get(main[p.pid].pid)
+            if reason is None or p.pid in self._self or p.pid in going:
+                continue
+            row = kept.get(p.norm)
+            if row is None:
+                kept[p.norm] = [p.norm in targets or self._is_junk(p.norm), p.rss,
+                                main[p.pid].name, reason]
+            else:
+                row[1] += p.rss
+                if _rank(reason) < _rank(row[3]):
+                    row[3] = reason
 
         usage = self.self_usage()
         self._govern(usage)
@@ -440,7 +541,7 @@ class Engine:
         if clean and not note:
             shown = "cleaning" if requested else "nothing idle to clean"
         # Close-list entries first, then the biggest memory users.
-        kept.sort(key=lambda k: (not k[0], -k[1]))
+        rows = sorted(kept.values(), key=lambda r: (not r[0], -r[1]))[:8]
         self.snapshot = {
             "updated": now, "pid": os.getpid(), "mode": cfg["mode"], "paused": paused,
             "note": shown, "mem": mem,
@@ -449,8 +550,8 @@ class Engine:
             "closed_total": self.closed_total, "closed": list(self.history),
             "closing": [r["name"] for r in self._pending.values()],
             "would_close": sorted(set(would_close)),
-            "kept": [{"name": n, "bytes": r, "reason": why} for _, r, n, why in kept[:8]],
-            "suggest": self._suggestions(procs, now, protect, targets),
+            "kept": [{"name": name, "bytes": size, "reason": why} for _, size, name, why in rows],
+            "suggest": self._suggestions(procs, by_pid, children, now, protect, targets),
             "self": dict(usage, slowdown=self.slowdown),
             "battery": self._on_battery,
         }
