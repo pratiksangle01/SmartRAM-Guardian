@@ -18,12 +18,11 @@ jobs:
         shell: powershell
         run: $PSVersionTable | Out-String | Write-Host
 
-      - name: Install test tools
+      - name: Install PSScriptAnalyzer
         shell: powershell
         run: |
           Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
           Install-Module PSScriptAnalyzer -Scope CurrentUser -Force -AllowClobber
-          Install-Module Pester -RequiredVersion 3.4.0 -Scope CurrentUser -Force -AllowClobber
           Get-Module -ListAvailable PSScriptAnalyzer | Select-Object Name, Version | Format-Table | Out-String | Write-Host
 
       - name: PSScriptAnalyzer
