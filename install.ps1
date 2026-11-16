@@ -1,57 +1,50 @@
-#Requires -Version 5.1
-<#
-.SYNOPSIS
-    Idempotent install: registers SmartRAM-Guardian to start at user logon via
-    a Scheduled Task (no admin needed). Every change is logged and reversible
-    with uninstall.ps1.
-#>
-[CmdletBinding()]
-param(
-    [switch]$NoAutoStart
-)
-Set-StrictMode -Version 2.0
+# SmartRAM Guardian installer for Windows (PowerShell 5.1 or newer). No admin rights needed.
 $ErrorActionPreference = 'Stop'
 
-$root = $PSScriptRoot
-$taskName = 'SmartRAM-Guardian'
-$startScript = Join-Path $root 'start.ps1'
-$configPath = Join-Path $root 'config.json'
+$source = if ($env:SMARTRAM_SOURCE) { $env:SMARTRAM_SOURCE } else { 'https://github.com/pratiksangle01/SmartRAM-Guardian/archive/refs/heads/main.zip' }
+$homeDir = if ($env:SMARTRAM_HOME) { $env:SMARTRAM_HOME } else { Join-Path $HOME '.smartram-guardian' }
+$venv = Join-Path $homeDir 'venv'
 
-# Validate config first - a broken config must never be installed.
-Import-Module (Join-Path $root 'src\SRG.Config.psm1') -Force
-$config = Get-SRGConfig -Path $configPath
-Write-Host "[ok] config.json valid (mode=$($config.Mode))"
-
-$logDir = Join-Path $root $config.LogDirectory
-if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory $logDir -Force | Out-Null }
-$installLog = Join-Path $logDir 'install.log'
-function Log([string]$msg) {
-    $line = '{0} {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $msg
-    Add-Content -LiteralPath $installLog -Value $line
-    Write-Host $msg
+function Find-Python {
+    foreach ($candidate in @(@('py', '-3'), @('python'), @('python3'))) {
+        $exe = $candidate[0]
+        $rest = @($candidate | Select-Object -Skip 1)
+        if (-not (Get-Command $exe -ErrorAction SilentlyContinue)) { continue }
+        try {
+            & $exe @rest -c 'import sys; sys.exit(sys.version_info < (3, 8))' 2>$null
+            if ($LASTEXITCODE -eq 0) { return , $candidate }
+        } catch { }
+    }
+    return $null
 }
 
-if ($NoAutoStart) {
-    Log '[skip] -NoAutoStart given; scheduled task not created'
-    return
+$python = Find-Python
+if (-not $python -and (Get-Command winget -ErrorAction SilentlyContinue)) {
+    Write-Host 'Python not found. Installing it with winget...'
+    winget install --id Python.Python.3.12 -e --silent --accept-package-agreements --accept-source-agreements
+    $env:Path = [Environment]::GetEnvironmentVariable('Path', 'User') + ';' + [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $python = Find-Python
+}
+if (-not $python) {
+    throw 'Python 3.8 or newer is required. Install it from https://www.python.org/downloads/ and run this again.'
 }
 
-$psExe = Join-Path $PSHome 'powershell.exe'
-$action = New-ScheduledTaskAction -Execute $psExe `
-    -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$startScript`""
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-    -MultipleInstances IgnoreNew -RestartCount 2 -RestartInterval (New-TimeSpan -Minutes 5) `
-    -ExecutionTimeLimit (New-TimeSpan -Hours 0)
-$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-
-$existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-if ($existing) {
-    # Idempotent: only update if the definition changed.
-    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
-    Log "[update] replaced existing scheduled task '$taskName'"
+function Invoke-Checked {
+    param([string]$Exe, [string[]]$Arguments)
+    & $Exe @Arguments
+    if ($LASTEXITCODE -ne 0) { throw "$Exe $($Arguments -join ' ') failed with exit code $LASTEXITCODE" }
 }
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
-    -Settings $settings -Principal $principal -Description 'SmartRAM-Guardian background memory manager (default mode: observe)' | Out-Null
-Log "[ok] registered scheduled task '$taskName' (at logon, limited rights, no time limit)"
-Log '[done] install complete. Run status.ps1 to verify, uninstall.ps1 to fully revert.'
+
+New-Item -ItemType Directory -Force -Path $homeDir | Out-Null
+$venvPython = Join-Path $venv 'Scripts\python.exe'
+if (Test-Path $venvPython) {
+    # Stop a previous install so its files are not locked during the upgrade.
+    & $venvPython -m smartram stop 2>$null | Out-Null
+}
+$pyRest = @($python | Select-Object -Skip 1)
+Invoke-Checked $python[0] ($pyRest + @('-m', 'venv', $venv))
+Invoke-Checked $venvPython @('-m', 'pip', 'install', '--quiet', '--upgrade', $source)
+Invoke-Checked $venvPython @('-m', 'smartram', 'enable')
+Invoke-Checked $venvPython @('-m', 'smartram', 'start')
+
+Write-Host "Installed. Command: $(Join-Path $venv 'Scripts\smartram.exe')"
