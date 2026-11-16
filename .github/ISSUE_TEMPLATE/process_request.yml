@@ -1,6 +1,6 @@
 name: Background process to add
 description: Suggest a background helper the guardian should close by itself, or one it must never close
-labels: [process-list]
+labels: [enhancement]
 body:
   - type: input
     id: name

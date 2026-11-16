@@ -119,6 +119,16 @@ A memory tool should not be the thing using your memory.
 
 `smartram status` and the panel show what the guardian itself is using.
 
+| System | CPU (of one core) | Memory |
+| --- | --- | --- |
+| Windows | 0.35% | 34 MB |
+| macOS | 0.58% | 93 MB |
+| Linux | 0.13% | 31 MB |
+
+Measured at v1.1.0 with the dolphin on screen, on GitHub's hosted test machines
+(140 to 535 running processes). Every change is measured again, and the build
+fails above 5% of a core or 250 MB. Measure your own machine with `python tools/footprint.py`.
+
 ## Settings
 
 Settings live in `~/.smartram-guardian/config.json` and are picked up without a restart.
