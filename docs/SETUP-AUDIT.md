@@ -8,8 +8,10 @@ Python v1.0.0 application. This merge preserves that replacement and its Python
 CI; it does not resurrect deleted PowerShell scripts or Pester tests. The setup
 guide has been rewritten for the current source. A subsequent merge of v1.1.0
 (`1f26716`) preserves its expanded README, contributing guide, performance gates,
-and capability diagnostics, while retaining the source-setup links. The findings below distinguish
-historical evidence from current instructions.
+and capability diagnostics, while retaining the source-setup links. The v1.2.0
+merge (`691f9a5`) retains the revised command/PATH instructions and updates the
+guide for installer linking and targeted uninstall cleanup. The findings below
+distinguish historical evidence from current instructions.
 
 ## Current newcomer path
 

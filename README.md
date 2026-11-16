@@ -40,7 +40,8 @@ curl -fsSL https://raw.githubusercontent.com/pratiksangle01/SmartRAM-Guardian/ma
 ```
 
 The installer needs no admin rights. It sets up a private Python environment in
-`~/.smartram-guardian`, starts the guardian and makes it start at login.
+`~/.smartram-guardian`, starts the guardian, makes it start at login and puts the
+`smartram` command on your PATH (set `SMARTRAM_NO_MODIFY_PATH=1` first to skip that).
 Python 3.8 or newer is required; on Windows the installer gets it with `winget` if it is missing.
 
 **With Git**
@@ -57,11 +58,11 @@ Update an installer install by running the install command again.
 
 ## What it does
 
-- **Always on, always visible.** A small dolphin stays in the corner of your screen and swims gently, so you know the guardian is alive. Drag it anywhere.
+- **Always on, always visible.** A small dolphin stays in the corner of your screen and swims gently, so you know the guardian is alive. Drag it anywhere. On Windows it floats freely; on macOS and Linux it sits on a small dark tile.
 - **One click shows everything.** RAM in use, RAM saved, what was closed, what was kept and why.
 - **Knows what you are working in.** The app in front of you and everything it started are never touched.
 - **Closes background junk on its own.** Idle updaters, crash handlers and similar helpers are closed when memory gets tight.
-- **Tells you what else could go.** Big apps that have sat idle in the background for a while are listed, with the one command that lets the guardian close them too.
+- **Tells you what else could go.** Big apps that have sat idle in the background for a while are listed with an **Allow** button. One click, one confirmation, and the guardian closes that app now and whenever it idles again.
 - **Clean now.** One button (or `smartram clean`) closes idle junk immediately.
 - **Careful by design.** System, security, terminal, editor, build and container processes are protected. Nothing is closed while an installer runs.
 - **Light on your machine.** It rests when there is nothing to do, saves power on battery and slows itself down if it ever uses too much CPU.
@@ -86,6 +87,9 @@ smartram doctor          # check what works on this machine
 smartram uninstall
 ```
 
+Open a new terminal after installing and the `smartram` command is there.
+With a Git install, use `python -m smartram <command>`.
+
 ## Source setup and tests
 
 For a fresh checkout, Python prerequisites, an isolated virtual environment,
@@ -96,26 +100,30 @@ The installers above enable login startup and start the guardian immediately;
 use the source guide for a test-only path without those changes.
 
 See the [setup audit](docs/SETUP-AUDIT.md) for findings and verification limits.
-After an installer install the command lives in `~/.smartram-guardian/venv/bin/smartram`
-(`venv\Scripts\smartram.exe` on Windows); on Linux and macOS it is also linked into `~/.local/bin`.
 
 ## How it decides
 
-A process is closed only when **all** of these are true:
+An app is closed only when **all** of these are true:
 
-1. It is on the built-in list of background junk, or you added it with `smartram allow`.
+1. It is on the built-in list of background junk, or you allowed it (the **Allow** button or `smartram allow`).
 2. It is not protected, and it is not the app in front of you or anything that app started.
 3. It has been quiet in the background for several checks in a row and has been running for at least a minute.
 4. RAM use is above the threshold (60% by default), or you asked for a clean.
-5. No installer or system update is running, and the guardian is not paused.
+5. No installer is running, and the guardian is not paused.
+
+An app is judged as a whole. If any of its helper processes is busy, the app stays;
+when it goes, it is closed through its main process and the helpers go with it.
+A different program it started (a game from a launcher, a document opened from a
+download) is never asked to close.
 
 Apps are asked to close the polite way: a window-close message on Windows, a
-terminate signal on macOS and Linux. Windows helpers that have no window are
-ended directly. A process that keeps coming back is left alone after three tries.
+terminate signal on macOS and Linux. On Windows an app that shows no window is
+ended directly, unless a program it started has a window open; then it stays.
+An app that keeps coming back is left alone after three tries.
 
 The panel shows the reason for everything that stays: `in use`, `protected`,
 `busy`, `not on close list`, `too small`, `just started`, `focus unknown`,
-`keeps coming back` or `no permission`.
+`has another app open`, `keeps coming back` or `no permission`.
 
 ## Light on your machine
 
@@ -131,12 +139,12 @@ A memory tool should not be the thing using your memory.
 
 | System | CPU (of one core) | Memory |
 | --- | --- | --- |
-| Windows | 0.35% | 34 MB |
-| macOS | 0.58% | 93 MB |
-| Linux | 0.13% | 31 MB |
+| Windows | about 0.3% | 34 MB |
+| macOS | under 1% | 95 MB |
+| Linux | about 0.2% | 26–32 MB |
 
-Measured at v1.1.0 with the dolphin on screen, on GitHub's hosted test machines
-(140 to 535 running processes). Every change is measured again, and the build
+Measured with the dolphin on screen over several runs on GitHub's hosted test
+machines (135 to 547 running processes). Every change is measured again, and the build
 fails above 5% of a core or 250 MB. Measure your own machine with `python tools/footprint.py`.
 
 ## Settings
@@ -157,8 +165,9 @@ Settings live in `~/.smartram-guardian/config.json` and are picked up without a 
 | `max_retries` | `3` | give up on a process that keeps coming back |
 | `self_cpu_limit_percent` | `2.0` | the guardian's own CPU budget |
 | `allow_without_focus` | `false` | close your `allow` apps even when the app in use cannot be detected |
+| `close_builtin_junk` | `true` | `false` closes only the apps you allowed yourself |
 | `widget` | `true` | show the dolphin |
-| `close_list` | `[]` | apps added with `smartram allow` |
+| `close_list` | `[]` | apps you allowed |
 | `protect_list` | `[]` | apps added with `smartram protect` |
 
 ## Questions
@@ -167,10 +176,10 @@ Settings live in `~/.smartram-guardian/config.json` and are picked up without a 
 No. Only built-in background junk and apps you allow yourself are ever closed, and never the app you are using.
 
 **Can I lose unsaved work?**
-Built-in junk has no documents. For an app you allow yourself, the guardian asks it to close the same way the system does at logout, so allow only apps that are safe to close when idle.
+Built-in junk has no documents. An app you allow is asked to close: on Windows it can still show its "save changes?" question, on macOS and Linux it usually just quits. Allow only apps that are safe to close when idle.
 
 **It did not close something. Why?**
-Open the panel or run `smartram status`; every kept process shows its reason.
+Open the panel or run `smartram status`; every kept app shows its reason.
 
 **Does it work on Wayland?**
 The app in use is detected on X11, Sway, Hyprland and KDE (with `kdotool`). GNOME on Wayland does not reveal it, so there only built-in junk is closed and your `allow` apps wait, unless you set `allow_without_focus`. `smartram doctor` tells you what your session supports.
@@ -179,7 +188,7 @@ The app in use is detected on X11, Sway, Hyprland and KDE (with `kdotool`). GNOM
 The pet needs a desktop session and Python's `tkinter`. Without them the guardian still runs; use `smartram status`. `smartram doctor` shows which one is missing.
 
 **How do I remove it?**
-`smartram uninstall` stops it, removes it from startup and deletes its data folder.
+`smartram uninstall` stops it, removes it from startup and from your PATH, and deletes its own files.
 
 ## Contributing
 

@@ -5,12 +5,15 @@ import logging
 import sys
 import time
 
-from . import pet_art
+from . import config as cfgmod
+from . import pet_art, rules
 
 log = logging.getLogger("smartram")
 
 SIZE = pet_art.SIZE
 DARK = "#14161c"
+RAISED = "#2a2e39"
+HOVER = "#3b4050"
 TEXT = "#e5e7eb"
 MUTED = "#9ca3af"
 KEY = "#010203"  # colour made see-through on Windows
@@ -28,6 +31,10 @@ def fmt_bytes(n):
 
 def _row(name, size, tail):
     return "%-17s %8s  %s" % (name[:17], fmt_bytes(size), tail)
+
+
+def tip_row(tip):
+    return "%-16s %8s  %d min" % (tip["name"][:16], fmt_bytes(tip["bytes"]), tip["idle_minutes"])
 
 
 def panel_text(snap):
@@ -74,6 +81,21 @@ def mood(snap, threshold):
     return "busy" if pct >= threshold else "ok"
 
 
+def new_root(tk, tries=3, wait=time.sleep):
+    """A Tk root window.
+
+    On Windows Tk now and then cannot read its own startup file and works again a
+    moment later. Anything else, such as a missing display, is reported at once.
+    """
+    for left in range(tries - 1, -1, -1):
+        try:
+            return tk.Tk()
+        except tk.TclError as e:
+            if not left or "init.tcl" not in str(e):
+                raise
+            wait(1)
+
+
 class Widget:
     def __init__(self, engine, stop_event, selftest=0):
         import tkinter as tk
@@ -81,8 +103,10 @@ class Widget:
         self.tk, self.engine, self.stop = tk, engine, stop_event
         self.expanded, self.frame, self._drag = False, 0, None
         self._pet_state = self._shown = None  # what is drawn now; redraw only on change
+        self._tips_shown = self._asking = None
+        self._allowed = set()  # suggestions just accepted, hidden until the engine catches up
 
-        root = self.root = tk.Tk()
+        root = self.root = new_root(tk)
         root.title("SmartRAM Guardian")
         root.overrideredirect(True)
         root.configure(bg=DARK)
@@ -91,28 +115,34 @@ class Widget:
                 root.attributes(attr, value)
             except tk.TclError:
                 pass
+        # On Windows only the dolphin shows, with no box around it. macOS does not paint
+        # pictures on a see-through window (checked on a real machine), so there and
+        # on Linux the pet sits on a small dark tile.
         self._clear = DARK
-        try:
-            if sys.platform == "win32":
+        if sys.platform == "win32":
+            try:
                 root.attributes("-transparentcolor", KEY)
                 self._clear = KEY
-            elif sys.platform == "darwin":
-                root.attributes("-transparent", True)
-                self._clear = "systemTransparent"
-        except tk.TclError:
-            self._clear = DARK
+            except tk.TclError:
+                pass
 
-        self.art = {name: tk.PhotoImage(master=root, data=getattr(pet_art, name))
+        # A colour key cannot blend soft edges, so Windows gets the hard-edged drawings.
+        prefix = "CRISP_" if self._clear == KEY else ""
+        self.art = {name: tk.PhotoImage(master=root, data=getattr(pet_art, prefix + name))
                     for name in ("OPEN", "BLINK", "PAUSED")}
-        mono = tkfont.nametofont("TkFixedFont").copy()
+        mono = self.mono = tkfont.nametofont("TkFixedFont").copy()
         mono.configure(size=9)
         bold = tkfont.nametofont("TkDefaultFont").copy()
         bold.configure(size=10, weight="bold")
 
-        self.pet = tk.Canvas(root, width=SIZE, height=SIZE, highlightthickness=0, bd=0)
-        self._img = self.pet.create_image(SIZE // 2, SIZE // 2, image=self.art["OPEN"])
+        self.pet = tk.Frame(root, width=SIZE, height=SIZE, bd=0, highlightthickness=0)
+        self.pet_img = tk.Label(self.pet, image=self.art["OPEN"], bd=0, highlightthickness=0)
+        self.pet_img.place(x=0, y=0)
         # Status dot: green fine, yellow busy, red high, grey paused.
-        self._dot = self.pet.create_oval(4, SIZE - 15, 15, SIZE - 4, outline="#0b0d12", width=2)
+        self.dot = tk.Canvas(self.pet, width=13, height=13, bd=0, highlightthickness=0)
+        self._dot = self.dot.create_oval(1, 1, 12, 12, outline="#0b0d12", width=2)
+        self.dot.place(x=3, y=SIZE - 16)
+        self._pet_parts = (self.pet, self.pet_img, self.dot)
         self.head = tk.Frame(root, bg=DARK)
         tk.Label(self.head, text="SmartRAM Guardian", font=bold, bg=DARK, fg=TEXT,
                  anchor="w").pack(fill="x", padx=8)
@@ -121,7 +151,7 @@ class Widget:
 
         self.panel = tk.Frame(root, bg=DARK)
         self._label(self.panel, "ram", mono, TEXT).pack(fill="x", padx=10, pady=(6, 2))
-        self.bar = tk.Canvas(self.panel, height=6, width=BAR, bg="#2a2e39",
+        self.bar = tk.Canvas(self.panel, height=6, width=BAR, bg=RAISED,
                              highlightthickness=0, bd=0)
         self._fill = self.bar.create_rectangle(0, 0, 0, 6, outline="")
         self.bar.pack(padx=10, pady=2)
@@ -136,19 +166,22 @@ class Widget:
         self.tips = tk.Frame(self.panel, bg=DARK)
         tk.Label(self.tips, text="Idle in the background", font=bold, bg=DARK, fg=TEXT,
                  anchor="w").pack(fill="x", padx=10, pady=(6, 0))
-        self._label(self.tips, "tips", mono, COLORS["busy"]).pack(fill="x", padx=10)
+        self.tip_rows = tk.Frame(self.tips, bg=DARK)
+        self.tip_rows.pack(fill="x", padx=10)
         self.footer = self._label(self.panel, "self", mono, "#6b7280")
         self.footer.pack(fill="x", padx=10, pady=(6, 0))
         buttons = tk.Frame(self.panel, bg=DARK)
         buttons.pack(fill="x", padx=10, pady=8)
         self.pause_btn = self._button(buttons, "Pause", self._toggle_pause)
         self.pause_btn.pack(side="left")
-        self._button(buttons, "Clean now", self._clean_now).pack(side="left", padx=6)
+        self.clean_btn = self._button(buttons, "Clean now", self._clean_now)
+        self.clean_btn.pack(side="left", padx=6)
         self._button(buttons, "Quit", self._quit).pack(side="right")
 
-        self.pet.bind("<ButtonPress-1>", self._press)
-        self.pet.bind("<B1-Motion>", self._motion)
-        self.pet.bind("<ButtonRelease-1>", self._release)
+        for part in self._pet_parts:
+            part.bind("<ButtonPress-1>", self._press)
+            part.bind("<B1-Motion>", self._motion)
+            part.bind("<ButtonRelease-1>", self._release)
 
         # Pet's screen position; the panel grows away from the nearest screen edges.
         self.px = root.winfo_screenwidth() - SIZE - 24
@@ -164,10 +197,17 @@ class Widget:
         self.labels[key] = lbl
         return lbl
 
-    def _button(self, parent, text, command):
-        return self.tk.Button(parent, text=text, command=command, bg="#2a2e39", fg=TEXT,
-                              activebackground="#3b4050", activeforeground=TEXT,
-                              relief="flat", bd=0, padx=12, pady=3, highlightthickness=0)
+    def _button(self, parent, text, command, small=False):
+        """A flat button. Built from a label: native buttons ignore colours on macOS."""
+        btn = self.tk.Label(parent, text=text, bg=RAISED, fg=TEXT, cursor="hand2",
+                            padx=6 if small else 12, pady=0 if small else 3)
+        if small:
+            btn.configure(font=self.mono)
+        btn.command = command
+        btn.bind("<ButtonRelease-1>", lambda _e: command())
+        btn.bind("<Enter>", lambda _e: btn.configure(bg=HOVER))
+        btn.bind("<Leave>", lambda _e: btn.configure(bg=RAISED))
+        return btn
 
     def _layout(self):
         root = self.root
@@ -177,14 +217,16 @@ class Widget:
         if not self.expanded:
             self.head.grid_forget()
             self.panel.grid_forget()
-            self.pet.configure(bg=self._clear)
+            for part in self._pet_parts:
+                part.configure(bg=self._clear)
             root.configure(bg=self._clear)
             self.pet.grid(row=0, column=0)
             self._size = (SIZE, SIZE)
             root.geometry("%dx%d+%d+%d" % (SIZE, SIZE, self.px, self.py))
             return
         right, bottom = self.px + SIZE / 2 > sw / 2, self.py + SIZE / 2 > sh / 2
-        self.pet.configure(bg=DARK)
+        for part in self._pet_parts:
+            part.configure(bg=DARK)
         root.configure(bg=DARK)
         row = 2 if bottom else 0
         self.pet.grid(row=row, column=1 if right else 0)
@@ -196,10 +238,18 @@ class Widget:
         y = self.py + SIZE - h if bottom else self.py
         root.geometry("%dx%d+%d+%d" % (w, h, max(0, x), max(0, y)))
 
+    def _relayout(self):
+        """Resize the open panel when its content grew or shrank."""
+        if self.expanded:
+            self.root.update_idletasks()
+            if (self.root.winfo_reqwidth(), self.root.winfo_reqheight()) != self._size:
+                self._layout()
+
     def toggle(self):
         self.expanded = not self.expanded
         # While the panel is open the engine keeps its details fresh; closed, it rests.
         self.engine.watching = self.expanded
+        self._asking = None
         if self.expanded:
             self._fill_panel()
             self.engine.wake()
@@ -248,6 +298,27 @@ class Widget:
             pass
         self.engine.wake()
 
+    def _ask(self, name):
+        """First click on Allow asks; the row turns into a yes/no question."""
+        self._asking = name
+        self._fill_tips(self.engine.snapshot or {})
+        self._relayout()
+
+    def _allow(self, name):
+        """Let the guardian close this app when it idles, starting now."""
+        self._asking = None
+        if not rules.is_protected(rules.normalize(name)):
+            try:
+                cfgmod.update_lists(self.engine.paths.config, name, "close_list",
+                                    ["protect_list"])
+                self.engine.paths.clean.write_text("clean", encoding="utf-8")
+                self._allowed.add(name)
+            except OSError:
+                pass
+        self._fill_tips(self.engine.snapshot or {})
+        self._relayout()
+        self.engine.wake()
+
     def _quit(self):
         self.stop.set()
         self.engine.wake()
@@ -264,9 +335,40 @@ class Widget:
         state = (art, dy, color)
         if state != self._pet_state:
             self._pet_state = state
-            self.pet.itemconfigure(self._img, image=self.art[art])
-            self.pet.coords(self._img, SIZE // 2, SIZE // 2 + dy)
-            self.pet.itemconfigure(self._dot, fill=color)
+            self.pet_img.configure(image=self.art[art])
+            self.pet_img.place(x=0, y=dy)
+            self.dot.itemconfigure(self._dot, fill=color)
+
+    def _fill_tips(self, snap):
+        """One row per idle app, each with a button that lets the guardian close it."""
+        offered = snap.get("suggest") or []
+        self._allowed &= {s["name"] for s in offered}
+        tips = [s for s in offered if s["name"] not in self._allowed]
+        shown = ([(s["name"], s["bytes"], s["idle_minutes"]) for s in tips], self._asking)
+        if shown == self._tips_shown:
+            return
+        self._tips_shown = shown
+        for child in self.tip_rows.winfo_children():
+            child.destroy()
+        for s in tips:
+            name = s["name"]
+            row = self.tk.Frame(self.tip_rows, bg=DARK)
+            row.pack(fill="x", pady=1)
+            asking = name == self._asking
+            text = "Close %s when idle?" % name[:16] if asking else tip_row(s)
+            self.tk.Label(row, text=text, font=self.mono, bg=DARK, fg=COLORS["busy"],
+                          anchor="w").pack(side="left")
+            if asking:
+                self._button(row, "No", lambda: self._ask(None), small=True).pack(side="right")
+                self._button(row, "Yes", lambda n=name: self._allow(n),
+                             small=True).pack(side="right", padx=4)
+            else:
+                self._button(row, "Allow", lambda n=name: self._ask(n),
+                             small=True).pack(side="right")
+        if tips:
+            self.tips.pack(fill="x", before=self.footer)
+        else:
+            self.tips.pack_forget()
 
     def _fill_panel(self):
         snap = self.engine.snapshot or {}
@@ -275,10 +377,7 @@ class Widget:
         text = panel_text(snap)
         for key, lbl in self.labels.items():
             lbl.configure(text=text[key])
-        if text["tips"]:
-            self.tips.pack(fill="x", before=self.footer)
-        else:
-            self.tips.pack_forget()
+        self._fill_tips(snap)
         self.pause_btn.configure(text="Resume" if paused else "Pause")
         pct = (snap.get("mem") or {}).get("percent", 0)
         self.bar.coords(self._fill, 0, 0, BAR * pct / 100.0, 6)
@@ -291,9 +390,7 @@ class Widget:
         if (snap.get("updated"), self._paused()) == self._shown:
             return
         self._fill_panel()
-        self.root.update_idletasks()
-        if (self.root.winfo_reqwidth(), self.root.winfo_reqheight()) != self._size:
-            self._layout()
+        self._relayout()
 
     def _tick(self):
         if self.stop.is_set():

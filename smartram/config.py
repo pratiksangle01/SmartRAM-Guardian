@@ -20,7 +20,7 @@ _NUMBERS = {
     "max_retries": (3, 1, 100),
     "self_cpu_limit_percent": (2.0, 0.1, 100.0),
 }
-_BOOLS = {"widget": True, "allow_without_focus": False}
+_BOOLS = {"widget": True, "allow_without_focus": False, "close_builtin_junk": True}
 MODES = ("auto", "observe")
 DEFAULTS = dict({k: v[0] for k, v in _NUMBERS.items()},
                 mode="auto", close_list=[], protect_list=[], **_BOOLS)
@@ -98,3 +98,15 @@ def write_json(path, data):
 
 def save(path, cfg):
     write_json(path, {k: cfg[k] for k in DEFAULTS})
+
+
+def update_lists(path, name, add_to=None, remove_from=()):
+    """Put a process name on one list and take it off others; returns the saved config."""
+    name = normalize(name)
+    cfg, _ = load(path)
+    if add_to:
+        cfg[add_to] = sorted(set(cfg[add_to]) | {name})
+    for key in remove_from:
+        cfg[key] = [n for n in cfg[key] if n != name]
+    save(path, cfg)
+    return cfg

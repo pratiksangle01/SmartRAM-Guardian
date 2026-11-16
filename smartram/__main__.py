@@ -15,7 +15,7 @@ import time
 
 import psutil
 
-from . import __version__, autostart, foreground
+from . import __version__, autostart, foreground, pathlink
 from . import config as cfgmod
 from .engine import Engine
 from .rules import is_protected, normalize
@@ -216,6 +216,8 @@ def cmd_doctor(paths, _args):
         import tkinter
         tkinter.Tk().destroy()
         pet = "ok (Tk %s)" % tkinter.TkVersion
+        if tkinter.TkVersion < 8.6:
+            pet = "Tk %s is old and may draw badly; a newer Python fixes that" % tkinter.TkVersion
     except ImportError:
         pet = "not available: this Python has no tkinter"
     except Exception:
@@ -266,12 +268,7 @@ def _edit_list(paths, name, add_to, remove_from):
     if add_to == "close_list" and is_protected(name):
         print("%s is a protected system/work process and is never closed." % name)
         return 2
-    cfg, _ = cfgmod.load(paths.config)
-    if add_to:
-        cfg[add_to] = sorted(set(cfg[add_to]) | {name})
-    for key in remove_from:
-        cfg[key] = [n for n in cfg[key] if n != name]
-    cfgmod.save(paths.config, cfg)
+    cfg = cfgmod.update_lists(paths.config, name, add_to, remove_from)
     print("close list: %s\nprotect list: %s" % (", ".join(cfg["close_list"]) or "-",
                                                 ", ".join(cfg["protect_list"]) or "-"))
     return 0
@@ -309,18 +306,46 @@ def cmd_disable(_paths, _args):
     return 0
 
 
+def cmd_link(paths, _args):
+    """Used by the installers: make `smartram` a command in new terminals."""
+    print("Installed. %s" % pathlink.link(paths.home))
+    return 0
+
+
+def _remove_own_files(home):
+    """Delete what the guardian put in its folder, and the folder itself once it is empty."""
+    for name in ("venv", "bin"):
+        shutil.rmtree(str(home / name), ignore_errors=True)
+    for item in list(home.glob("*")):
+        if item.is_file() and item.name.startswith(("config.json", "state.json", "guardian.")):
+            try:
+                item.unlink()
+            except OSError:
+                pass
+    try:
+        home.rmdir()
+    except OSError:
+        pass
+
+
 def cmd_uninstall(paths, args):
     cmd_stop(paths, args)
     autostart.disable()
-    link = os.path.join(os.path.expanduser("~"), ".local", "bin", "smartram")
-    if os.path.islink(link):
-        os.unlink(link)
-    # The running interpreter may live inside this folder (Windows keeps it locked).
-    shutil.rmtree(str(paths.home), ignore_errors=True)
-    if paths.home.exists():
-        print("Stopped and removed from startup. Delete this folder to finish: %s" % paths.home)
-    else:
+    pathlink.unlink(paths.home)
+    home = paths.home
+    _remove_own_files(home)
+    if not home.exists():
         print("Uninstalled.")
+    elif sys.platform == "win32" and ((home / "venv").exists() or (home / "bin").exists()):
+        # Windows will not delete a running program, so the rest goes once this one has exited.
+        subprocess.Popen('cmd /c "ping -n 4 127.0.0.1 >nul & rmdir /s /q "%s" & rmdir /s /q "%s"'
+                         ' & rmdir "%s""' % (home / "venv", home / "bin", home),
+                         cwd=os.environ.get("SystemRoot") or "C:\\", creationflags=0x08000200,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
+        print("Uninstalled. The folder %s is removed in a few seconds." % home)
+    else:
+        print("Uninstalled. Other files were left in %s." % home)
     return 0
 
 
@@ -352,6 +377,7 @@ COMMANDS = {
     "enable": (cmd_enable, "start automatically at login"),
     "disable": (cmd_disable, "do not start at login"),
     "uninstall": (cmd_uninstall, "stop, remove autostart and delete data"),
+    "link": (cmd_link, None),
     "widget-test": (cmd_widget_test, None),
 }
 

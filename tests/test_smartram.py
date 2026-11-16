@@ -2,25 +2,31 @@ import json
 import os
 import subprocess
 import sys
+import threading
+import time
 
 import psutil
 import pytest
 
-from smartram import autostart, config, foreground, rules
+from smartram import autostart, config, engine, foreground, pathlink, rules
 from smartram.__main__ import main
-from smartram.engine import Engine, active_tree, make_proc
-from smartram.widget import fmt_bytes, mood, panel_text
+from smartram.engine import (OTHER_OPEN, Engine, active_tree, children_map, main_process,
+                             make_proc, own_pids, parent_of)
+from smartram.widget import SIZE, Widget, fmt_bytes, mood, new_root, panel_text
 
 MB = 2**20
 
 
 class FakeCloser:
-    def __init__(self, result=(True, 50 * MB, "")):
-        self.result, self.asked = result, []
+    def __init__(self, result=(True, "")):
+        self.result, self.asked, self.families = result, [], []
 
-    def request(self, proc):
+    def request(self, proc, family=()):
         self.asked.append(proc.name)
-        return self.result
+        self.families.append(sorted(m.pid for m in family))
+        ok, why = self.result
+        held = [(m.pid, m.create, 50 * MB) for m in [proc] + list(family)] if ok else []
+        return ok, why, held
 
 
 class World:
@@ -44,7 +50,7 @@ class World:
                              foreground=lambda: self.fg, clock=lambda: self.now,
                              memory=self.memory, battery=lambda: self.on_battery,
                              self_usage=lambda: {"cpu": self.own_cpu, "rss": 30 * MB},
-                             owned=lambda proc: True)
+                             owned=lambda proc: True, app_like=lambda proc: True)
 
     def memory(self):
         return {"total": 8 * 2**30, "available": 2 * 2**30, "percent": self.percent}
@@ -202,10 +208,203 @@ def test_same_named_instances_close_together(world):
 
 
 def test_no_permission_is_reported_and_not_retried(tmp_path):
-    world = World(tmp_path, closer=FakeCloser((False, 0, "no permission")))
+    world = World(tmp_path, closer=FakeCloser((False, "no permission")))
     snap = world.tick(6)
     assert world.closer.asked == ["GoogleUpdate.exe"]
     assert world.reason(snap, "GoogleUpdate.exe") == "no permission"
+
+
+def app(pid, name, rss=100 * MB, cpu=0.0, ppid=1):
+    return make_proc(pid, name, rss, cpu=cpu, ppid=ppid)
+
+
+def test_app_closes_through_its_main_process_and_takes_helpers_along(world):
+    config.save(world.paths.config, dict(config.DEFAULTS, close_list=["discord"]))
+    world.remove(200)
+    world.procs += [app(400, "Discord"), app(401, "Discord", ppid=400),
+                    app(402, "Discord", ppid=401), app(403, "discord_gpu_helper", ppid=400)]
+    snap = world.tick(4)
+    assert world.closer.asked == ["Discord"] and world.closer.families == [[401, 402, 403]]
+    assert snap["closing"] == ["Discord"] and world.reason(snap, "Discord") is None
+    assert world.reason(snap, "discord_gpu_helper") is None     # goes with its app
+    world.procs = [p for p in world.procs if p.pid < 400]
+    closed = world.tick()["closed"][0]
+    assert closed["name"] == "Discord" and closed["bytes"] == 4 * 50 * MB   # helpers counted
+
+
+def test_something_the_app_started_that_lives_on_is_not_counted_or_closed(world):
+    config.save(world.paths.config, dict(config.DEFAULTS, close_list=["steam"]))
+    world.remove(200)
+    steam, helper = app(400, "steam.exe"), app(401, "steamwebhelper.exe", ppid=400)
+    game = app(402, "game.exe", ppid=400)
+    world.procs += [steam, helper, game]
+    world.tick(4)
+    assert world.closer.asked == ["steam.exe"]
+    assert own_pids(steam, [helper, game]) == [400, 401]        # the game keeps its windows
+    world.procs = [p for p in world.procs if p.pid not in (400, 401)]
+    snap = world.tick()
+    assert snap["closed"][0]["bytes"] == 2 * 50 * MB            # the game still holds its memory
+    assert world.reason(snap, "game.exe") == "not on close list"
+
+
+def test_launcher_is_asked_again_once_what_it_started_is_closed(tmp_path):
+    world = World(tmp_path, closer=FakeCloser((False, OTHER_OPEN)))
+    snap = world.tick(6)
+    assert world.reason(snap, "GoogleUpdate.exe") == OTHER_OPEN and snap["closing"] == []
+    asked = len(world.closer.asked)
+    assert asked > 1                                            # asked again on every scan
+    world.closer.result = (True, "")
+    assert world.tick()["closing"] == ["GoogleUpdate.exe"]
+    assert len(world.closer.asked) == asked + 1
+
+
+def test_a_process_is_never_ended_while_its_tree_shows_a_window(monkeypatch):
+    """The Windows rule, tried on every system with a real process and made-up windows."""
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+    try:
+        born = psutil.Process(child.pid).create_time()
+        launcher = make_proc(child.pid, "steam.exe", rss=5, create=born)
+        game, asked, shown = make_proc(4000000, "game.exe", rss=7), [], set()
+        monkeypatch.setattr(engine, "WINDOWS", True)
+        monkeypatch.setattr(engine, "visible_windows", lambda pids: sorted(shown & set(pids)))
+        monkeypatch.setattr(engine, "close_windows", asked.extend)
+        closer = engine.Closer()
+
+        shown.add(game.pid)                                     # only what it started has a window
+        assert closer.request(launcher, [game]) == (False, OTHER_OPEN, [])
+        shown.add(child.pid)                                    # its own window: asked, not ended
+        ok, why, held = closer.request(launcher, [game])
+        assert (ok, why, asked) == (True, "", [child.pid])      # the game's window is not touched
+        assert [m[0] for m in held] == [child.pid, game.pid] and held[0][2] > 0 and held[1][2] == 7
+        time.sleep(0.5)
+        assert child.poll() is None
+
+        shown.clear()                                           # no window anywhere: ended directly
+        assert closer.request(launcher, [game])[0] and asked == [child.pid]
+        child.wait(15)
+    finally:
+        if child.poll() is None:
+            child.kill()
+
+
+def test_app_with_a_tiny_main_process_is_sized_as_a_whole(world):
+    config.save(world.paths.config, dict(config.DEFAULTS, close_list=["launcher"]))
+    world.remove(200)
+    world.procs += [app(400, "launcher", rss=2 * MB), app(401, "launcher", rss=300 * MB, ppid=400)]
+    world.tick(4)
+    assert world.closer.asked == ["launcher"]
+    world.procs = [p for p in world.procs if p.pid < 400] + [app(500, "launcher", rss=2 * MB)]
+    world.engine._attempts.clear()
+    assert world.reason(world.tick(4), "launcher") == "too small"
+
+
+def test_one_busy_helper_keeps_the_whole_app(world):
+    config.save(world.paths.config, dict(config.DEFAULTS, close_list=["discord"]))
+    world.remove(200)
+    world.procs += [app(400, "Discord"), app(401, "Discord", ppid=400),
+                    app(402, "voice_engine", cpu=20.0, ppid=401)]
+    snap = world.tick(5)
+    assert world.closer.asked == []
+    assert world.reason(snap, "Discord") == "busy"
+    rows = {k["name"]: k["bytes"] for k in snap["kept"]}
+    assert rows["Discord"] == 200 * MB                          # one row for the app
+
+
+def test_helpers_of_an_unlisted_app_are_never_closed_alone(world):
+    # The helper is on the close list, its main process is not.
+    config.save(world.paths.config, dict(config.DEFAULTS, close_list=["slack"]))
+    world.remove(200)
+    world.procs += [app(400, "launcher"), app(401, "slack", ppid=400),
+                    app(402, "slack", ppid=401)]
+    world.tick(4)
+    assert world.closer.asked == ["slack"] and world.closer.families == [[402]]
+
+
+def test_reused_parent_pid_is_not_a_parent():
+    old = make_proc(10, "app", create=100.0, ppid=50)
+    newer = make_proc(50, "other", create=900.0)                # PID 50 was reused later
+    real = make_proc(60, "app", create=50.0)
+    child = make_proc(61, "app", create=100.0, ppid=60)
+    by_pid = {p.pid: p for p in (old, newer, real, child)}
+    assert parent_of(by_pid, old) is None and parent_of(by_pid, child) is real
+    assert main_process(by_pid, child) is real and main_process(by_pid, old) is old
+    assert children_map(by_pid) == {60: [child]}
+    assert active_tree(by_pid, 10) == {10}
+
+
+def test_desktop_in_front_does_not_put_every_app_in_use(world):
+    config.save(world.paths.config, dict(config.DEFAULTS, close_list=["spotify"]))
+    world.procs = [make_proc(10, "explorer.exe", 80 * MB, ppid=0),
+                   make_proc(11, "chrome.exe", 500 * MB, ppid=10),
+                   make_proc(12, "chrome.exe", 300 * MB, ppid=11),
+                   make_proc(13, "spotify", 400 * MB, ppid=10)]
+    by_pid = {p.pid: p for p in world.procs}
+    assert active_tree(by_pid, 10) == {10}                      # a click on the taskbar
+    assert active_tree(by_pid, 11) == {10, 11, 12}              # working in the browser
+    world.fg = 10
+    world.tick(4)
+    assert world.closer.asked == ["spotify"]                    # still counted as idle
+
+
+def test_no_suggestions_while_the_app_in_front_is_unknown(world):
+    world.fg = None
+    world.tick()
+    world.now += 16 * 60
+    assert world.tick()["suggest"] == []
+    config.save(world.paths.config, dict(config.DEFAULTS, allow_without_focus=True))
+    assert [s["name"] for s in world.tick()["suggest"]] == ["spotify"]
+
+
+def test_window_of_another_account_does_not_count_as_focus(world):
+    config.save(world.paths.config, dict(config.DEFAULTS, close_list=["spotify"]))
+    world.engine.owned = lambda proc: proc.pid != 100           # firefox is someone else's
+    snap = world.tick(4)
+    assert snap["focus"] is None and world.reason(snap, "spotify") == "focus unknown"
+
+
+def test_builtin_junk_can_be_turned_off(world):
+    config.save(world.paths.config, dict(config.DEFAULTS, close_builtin_junk=False))
+    snap = world.tick(5)
+    assert world.closer.asked == []
+    assert world.reason(snap, "GoogleUpdate.exe") == "not on close list"
+
+
+def test_services_that_always_run_do_not_block_closing(world):
+    world.procs += [make_proc(500, "unattended-upgr", MB), make_proc(501, "TiWorker.exe", MB),
+                    make_proc(502, "TrustedInstaller.exe", MB)]
+    assert world.tick(4)["note"] == "active" and world.closer.asked == ["GoogleUpdate.exe"]
+    assert not {"deja-dup-monitor", "update-notifier"} & rules.JUNK
+
+
+def test_suggestions_are_whole_top_level_apps_only(world):
+    world.procs += [app(400, "Slack", rss=150 * MB), app(401, "Slack Helper", ppid=400),
+                    app(402, "Slack Helper (Renderer)", rss=300 * MB, ppid=400),
+                    app(500, "Xorg", rss=600 * MB), app(600, "tracker-miner", rss=400 * MB)]
+    world.engine.app_like = lambda proc: proc.name != "tracker-miner"
+    world.tick()
+    world.now += 16 * 60
+    names = {s["name"]: s["bytes"] for s in world.tick()["suggest"]}
+    assert names == {"Slack": 550 * MB, "spotify": 400 * MB}    # helpers counted, not listed
+
+
+@pytest.mark.parametrize("path,platform,expected", [
+    (r"C:\Windows\System32\TextInputHost.exe", "win32", False),
+    (r"c:\windows\explorer.exe", "win32", False),
+    (r"C:\Users\me\AppData\Local\Discord\app-1.0\Discord.exe", "win32", True),
+    (r"C:\WindowsApps\Spotify.exe", "win32", True),
+    ("/Applications/Slack.app/Contents/MacOS/Slack", "darwin", True),
+    ("/System/Applications/Mail.app/Contents/MacOS/Mail", "darwin", True),
+    ("/Applications/Slack.app/Contents/Frameworks/Slack Helper.app/Contents/MacOS/Slack Helper",
+     "darwin", False),
+    ("/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder", "darwin", False),
+    ("/opt/homebrew/bin/postgres", "darwin", False),
+    ("/usr/lib/firefox/firefox", "linux", True),
+    ("/usr/libexec/evolution-data-server", "linux", False),
+    ("/usr/lib/x86_64-linux-gnu/libexec/kf5/kioslave5", "linux", False),
+    ("", "linux", False), (None, "win32", False),
+])
+def test_looks_like_app(path, platform, expected):
+    assert rules.looks_like_app(path, platform, r"C:\Windows") is expected
 
 
 def test_calm_mode_scans_only_when_something_can_happen(world):
@@ -256,9 +455,11 @@ def test_backs_off_when_the_guardian_itself_is_heavy(world):
     assert world.tick()["self"]["slowdown"] == 2
     assert world.tick(5)["self"]["slowdown"] == 8              # capped
     world.own_cpu = 1.5                                        # under the limit: hold
-    assert world.tick()["self"]["slowdown"] == 8
-    world.own_cpu = 0.2
-    assert world.tick(3)["self"]["slowdown"] == 1
+    assert world.tick(8)["self"]["slowdown"] == 8
+    world.own_cpu = 0.2                                        # light for a while: recover
+    assert world.tick(4)["self"]["slowdown"] == 8              # ...but not at once
+    assert world.tick()["self"]["slowdown"] == 4
+    assert world.tick(10)["self"]["slowdown"] == 1
 
 
 def test_clean_now_ignores_the_ram_threshold(world):
@@ -361,7 +562,7 @@ def test_panel_text_and_mood(world):
 def test_pet_art_is_png():
     import base64
     from smartram import pet_art
-    for name in ("OPEN", "BLINK", "PAUSED"):
+    for name in ("OPEN", "BLINK", "PAUSED", "CRISP_OPEN", "CRISP_BLINK", "CRISP_PAUSED"):
         assert base64.b64decode(getattr(pet_art, name)).startswith(b"\x89PNG")
 
 
@@ -410,6 +611,201 @@ def test_background_start_status_stop(tmp_path):
         assert run("stop").returncode == 0
     assert run("status").returncode == 3
     assert not (tmp_path / "guardian.pid").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the Windows PATH is checked by the CI installer step")
+def test_command_is_linked_and_unlinked(tmp_path, monkeypatch):
+    program = tmp_path / "venv" / "bin" / "smartram"
+    program.parent.mkdir(parents=True)
+    program.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(pathlink, "_program", lambda: program)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / ".config"))
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+    for name in ("ZDOTDIR", "SMARTRAM_NO_MODIFY_PATH"):
+        monkeypatch.delenv(name, raising=False)
+    zshrc, link = tmp_path / ".zshrc", tmp_path / ".local" / "bin" / "smartram"
+    zshrc.write_text("alias ll='ls -l'")
+
+    assert "new terminal" in pathlink.link(tmp_path)
+    assert os.path.realpath(str(link)) == os.path.realpath(str(program))
+    pathlink.link(tmp_path)                                    # running the installer again
+    text = zshrc.read_text()
+    assert text.startswith("alias ll='ls -l'\n") and text.count(".local/bin") == 1
+    monkeypatch.setenv("SHELL", "/usr/bin/fish")
+    pathlink.link(tmp_path)
+    fish = tmp_path / ".config" / "fish" / "conf.d" / "smartram.fish"
+    assert fish.exists()
+
+    pathlink.unlink(tmp_path)
+    assert not os.path.lexists(str(link)) and not fish.exists()
+    assert zshrc.read_text() == "alias ll='ls -l'\n"           # the user's own lines stay
+
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+    monkeypatch.setenv("PATH", "%s:/usr/bin" % link.parent)    # already on PATH: edit nothing
+    assert pathlink.link(tmp_path) == "Command: smartram"
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("SMARTRAM_NO_MODIFY_PATH", "1")
+    assert pathlink.link(tmp_path) == "Command: %s" % link
+    assert "SmartRAM" not in zshrc.read_text()
+
+    # Another installation's link is not ours to remove.
+    monkeypatch.setattr(pathlink, "_program", lambda: tmp_path / "other" / "smartram")
+    pathlink.unlink(tmp_path)
+    assert os.path.lexists(str(link))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell profiles")
+def test_shell_profile_choice_never_hides_another_profile(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("ZDOTDIR", raising=False)
+    pick = pathlink._profile_for
+    assert pick("/bin/zsh").name == ".zshrc" and pick("/bin/bash", "linux").name == ".bashrc"
+    assert pick("/bin/dash").name == ".profile" and pick("").name == ".profile"
+    assert pick("/bin/bash", "darwin").name == ".profile"      # no new ~/.bash_profile
+    (tmp_path / ".bash_profile").write_text("")
+    assert pick("/bin/bash", "darwin").name == ".bash_profile"
+
+
+@pytest.mark.skipif(sys.platform != "win32",
+                    reason="only Windows keeps open files from being deleted")
+def test_uninstall_finishes_by_itself_when_windows_has_files_locked(tmp_path, monkeypatch, capsys):
+    home = tmp_path / "smartram home"                          # a space, as in many user names
+    (home / "venv").mkdir(parents=True)
+    locked = home / "venv" / "python.exe"
+    locked.write_text("x")
+    (home / "config.json").write_text("{}")
+    monkeypatch.setenv("SMARTRAM_HOME", str(home))
+    monkeypatch.setattr(autostart, "disable", lambda: None)
+    monkeypatch.setattr(pathlink, "unlink", lambda home: None)
+    with open(str(locked), "rb"):                              # stands in for the running program
+        assert main(["uninstall"]) == 0
+        assert "few seconds" in capsys.readouterr().out and locked.exists()
+    deadline = time.time() + 30
+    while home.exists() and time.time() < deadline:
+        time.sleep(0.5)
+    assert not home.exists()
+
+
+def test_uninstall_deletes_only_its_own_files(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("SMARTRAM_HOME", str(tmp_path))
+    monkeypatch.setattr(autostart, "disable", lambda: None)
+    monkeypatch.setattr(pathlink, "unlink", lambda home: None)
+    for name in ("config.json", "state.json", "guardian.log", "guardian.log.1", "thesis.docx"):
+        (tmp_path / name).write_text("x")
+    (tmp_path / "venv").mkdir()
+    (tmp_path / "venv" / "pyvenv.cfg").write_text("x")
+    assert main(["uninstall"]) == 0
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["thesis.docx"]
+    assert "Other files were left" in capsys.readouterr().out
+    (tmp_path / "thesis.docx").unlink()
+    (tmp_path / "config.json").write_text("{}")
+    assert main(["uninstall"]) == 0 and not tmp_path.exists()
+
+
+@pytest.fixture
+def pet(world):
+    pytest.importorskip("tkinter")
+    if sys.platform.startswith("linux") and not os.environ.get("DISPLAY"):
+        pytest.skip("no display")
+    world.procs.append(app(700, "Slack", rss=300 * MB))
+    world.tick()
+    world.now += 16 * 60
+    world.tick()                                               # spotify and Slack are suggested
+    widget = Widget(world.engine, threading.Event())
+    yield widget
+    try:
+        widget.root.destroy()
+    except Exception:
+        pass
+
+
+def test_pet_gets_past_a_passing_tk_start_failure_but_reports_a_lasting_one():
+    class FlakyTk:
+        class TclError(Exception):
+            pass
+
+        def __init__(self, *errors):
+            self.errors, self.waits = list(errors), []
+
+        def Tk(self):
+            if self.errors:
+                raise self.TclError(self.errors.pop(0))
+            return "root"
+
+    lost = "Can't find a usable init.tcl in the following directories"
+    tk = FlakyTk(lost, lost)
+    assert new_root(tk, wait=tk.waits.append) == "root" and tk.waits == [1, 1]
+    tk = FlakyTk(lost, lost, lost, lost)
+    with pytest.raises(tk.TclError):
+        new_root(tk, wait=tk.waits.append)
+    assert len(tk.errors) == 1 and tk.waits == [1, 1]          # three tries, then it says so
+    tk = FlakyTk("no display name and no $DISPLAY environment variable", "x")
+    with pytest.raises(tk.TclError):
+        new_root(tk, wait=tk.waits.append)
+    assert tk.errors == ["x"] and tk.waits == []               # not something that passes
+
+
+def test_pet_opens_closes_and_can_be_dragged(pet, world):
+    from types import SimpleNamespace as Event
+    size = lambda: (pet.root.winfo_reqwidth(), pet.root.winfo_reqheight())
+    pet.root.update()
+    assert not pet.expanded and pet._size == (SIZE, SIZE)
+    pet._press(Event(x_root=500, y_root=500))
+    pet._release(Event())                                      # a click opens the panel
+    pet.root.update()
+    assert pet.expanded and world.engine.watching and size()[0] > 200 and size()[1] > 200
+    assert pet.labels["ram"].cget("text").startswith("RAM 80%")
+    assert "firefox" in pet.labels["kept"].cget("text")
+    x = pet.px
+    pet._press(Event(x_root=500, y_root=500))
+    pet._motion(Event(x_root=440, y_root=470))
+    pet._release(Event())                                      # a drag moves it, no toggle
+    assert pet.expanded and pet.px == x - 60
+    pet.toggle()
+    pet.root.update()
+    assert not pet.expanded and not world.engine.watching and pet._size == (SIZE, SIZE)
+
+
+def test_pet_buttons_pause_clean_and_quit(pet, world):
+    pet.toggle()
+    pet.pause_btn.command()
+    assert world.paths.pause.exists() and pet.pause_btn.cget("text") == "Resume"
+    assert pet._pet_state[0] == "PAUSED"
+    pet.pause_btn.command()
+    assert not world.paths.pause.exists() and pet.pause_btn.cget("text") == "Pause"
+    pet.clean_btn.command()
+    assert world.paths.clean.exists()
+    pet._quit()
+    assert pet.stop.is_set()
+
+
+def test_pet_allow_asks_first_then_lets_the_guardian_close_the_app(pet, world):
+    def rows():
+        pet.root.update_idletasks()
+        return [[c.cget("text") for c in row.winfo_children()]
+                for row in pet.tip_rows.winfo_children()]
+
+    def click(row, label):
+        button = [c for c in pet.tip_rows.winfo_children()[row].winfo_children()
+                  if c.cget("text") == label][0]
+        button.command()
+
+    pet.toggle()
+    assert [r[1:] for r in rows()] == [["Allow"], ["Allow"]] and "spotify" in rows()[0][0]
+    click(0, "Allow")
+    assert rows()[0][0] == "Close spotify when idle?" and sorted(rows()[0][1:]) == ["No", "Yes"]
+    click(0, "No")
+    assert rows()[0][1:] == ["Allow"] and not world.paths.config.exists()
+    click(0, "Allow")
+    click(0, "Yes")
+    assert config.load(world.paths.config)[0]["close_list"] == ["spotify"]
+    assert world.paths.clean.exists() and len(rows()) == 1 and "Slack" in rows()[0][0]
+    world.tick(2)                                              # the guardian acts on it
+    assert world.closer.asked == ["GoogleUpdate.exe", "spotify"]
+    pet._refresh_panel()
+    assert len(rows()) == 1 and "spotify" in pet.labels["closed"].cget("text")
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="registry is covered by the CI smoke test")

@@ -1,6 +1,6 @@
 # Source setup and troubleshooting
 
-These instructions describe the **v1.1.0 Python implementation**, not the retired
+These instructions describe the **v1.2.0 Python implementation**, not the retired
 Windows PowerShell guardian. The application supports Linux, macOS, and Windows.
 PowerShell/Pester scripts from v0.1.0 are no longer needed.
 
@@ -110,8 +110,12 @@ or `.\install.ps1` in Windows PowerShell, following organizational execution pol
 `SMARTRAM_SOURCE` overrides the source installed (including a local checkout);
 `SMARTRAM_HOME` overrides the installation/data location. Use the same home when
 issuing subsequent commands. To undo login startup use `smartram disable`.
-`smartram uninstall` stops the guardian, disables autostart, and **deletes its
-application data directory**, including configuration and logs.
+Installers also link the `smartram` command and may update the user PATH or shell
+profile; open a new terminal afterward. `SMARTRAM_NO_MODIFY_PATH=1` suppresses
+PATH/profile edits, but not command-link creation or login startup.
+`smartram uninstall` stops the guardian, disables autostart, undoes its command
+link/PATH changes, and **deletes its installation files, configuration, and logs**.
+Unrelated files in the application data directory are left in place.
 
 ## Common failures
 
@@ -123,8 +127,10 @@ application data directory**, including configuration and logs.
   then recreate the environment.
 - **`smartram` not found after install:** use the venv interpreter with
   `-m smartram`, or its `bin/smartram` (`Scripts\smartram.exe` on Windows).
-  The Unix installer also creates `~/.local/bin/smartram`; that directory must be
-  on PATH to use the short command outside the venv.
+  Open a new terminal after an installer install to pick up its PATH changes.
+  Unix installers link into `~/.local/bin`; Windows installers link into the
+  application home's `bin` directory. If PATH edits were disabled, add the
+  relevant directory through your approved shell/user settings.
 - **No display or Tk:** use `--no-widget` for daemon checks. CI uses Xvfb on Linux
   for the separate widget check; a successful headless test is not GUI proof.
 - **Dependency download fails:** check approved network/proxy/package-index
